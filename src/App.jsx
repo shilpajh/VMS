@@ -3,7 +3,7 @@ import {
   QrCode, ScanFace, CreditCard, UserPlus, ArrowRight, ArrowLeft, CheckCircle2,
   Bell, ShieldAlert, Eye, Camera, LogOut, Siren, FileText, Users, Building2,
   ClipboardList, AlertTriangle, UserCheck, UserX, Clock, Printer, Settings,
-  MessageCircle, Send, Sparkles, ScanLine, CalendarPlus, Ticket, X, MapPin,
+  Send, Sparkles, ScanLine, CalendarPlus, Ticket, X, MapPin,
   Package, Star, Globe, BarChart3, Wifi, Battery, Signal,
 } from "lucide-react";
 
@@ -272,16 +272,17 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout }) {
 
   const isWalkIn = method === "Walk-in visitor";
   const pending = visitors.find((v) => v.id === pendingId);
+  const pendingStatus = pending?.status;
 
   useEffect(() => {
     if (step !== "waiting" || !pending) return;
-    if (pending.status === "checked-in") {
+    if (pendingStatus === "checked-in") {
       setIssued(pending); setStep("printing");
       setTimeout(() => setStep("badge"), 1700);
-    } else if (pending.status === "denied") {
+    } else if (pendingStatus === "denied") {
       setStep("deniedscreen");
     }
-  }, [step, pending && pending.status]);
+  }, [step, pending, pendingStatus]);
 
   const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); };
 
