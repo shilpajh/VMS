@@ -4,7 +4,7 @@ import {
   Bell, ShieldAlert, Eye, Camera, LogOut, Siren, FileText, Users, Building2,
   ClipboardList, AlertTriangle, UserCheck, UserX, Clock, Printer, Settings,
   Send, Sparkles, ScanLine, CalendarPlus, Ticket, X, MapPin,
-  Package, Star, Globe, BarChart3, Wifi, Battery, Signal, Monitor, Smartphone,
+  Package, Star, Globe, BarChart3, Wifi, Battery, Signal,
 } from "lucide-react";
 
 const HOSTS = ["Rahul Mehta — Engineering", "Sara Khan — HR", "David Lee — Security", "Anita Rao — Finance"];
@@ -35,7 +35,6 @@ const seedAlerts = [
 
 export default function App() {
   const [view, setView] = useState("kiosk");
-  const [device, setDevice] = useState("desktop"); // "desktop" | "mobile"
   const [visitors, setVisitors] = useState(seedVisitors);
   const [invites, setInvites] = useState(seedInvites);
   const [deliveries, setDeliveries] = useState([{ id: 1, courier: "BlueDart", pkg: "Document envelope", host: HOSTS[1], at: mins(40), collected: true }]);
@@ -43,13 +42,6 @@ export default function App() {
   const [watchlist, setWatchlist] = useState(["Victor Crane"]);
   const [evac, setEvac] = useState(false);
   const [badgeSeq, setBadgeSeq] = useState(20461);
-  const [audit, setAudit] = useState([
-    { id: 1, at: mins(165), actor: "Kiosk", action: "Check-in", detail: "Joseph D'Souza · ID scan · badge V-20388" },
-    { id: 2, at: mins(64), actor: "Kiosk", action: "Check-in", detail: "Anita Kapoor · QR invite · badge V-20455 · VIP" },
-    { id: 3, at: mins(22), actor: "Kiosk", action: "Check-in", detail: "Meera Thomas · QR invite · badge V-20458" },
-    { id: 4, at: mins(19), actor: "Camera AI", action: "Alert", detail: "Tailgating detected — turnstile B2" },
-  ]);
-  const logAudit = (actor, action, detail) => setAudit((s) => [{ id: Date.now() + Math.random(), at: Date.now(), actor, action, detail }, ...s]);
   const [toast, setToast] = useState(null);
   const [, setTick] = useState(0);
 
@@ -67,9 +59,9 @@ export default function App() {
     const v = { id: Date.now(), name, company: company || "—", host, purpose, method, badge, zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: flagged ? "held" : needsOk ? "awaiting-approval" : "checked-in", flagged, hostResponse: null };
     setVisitors((s) => [v, ...s]);
     if (inviteId) setInvites((s) => s.map((i) => (i.id === inviteId ? { ...i, used: true } : i)));
-    if (flagged) { addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." }); logAudit("Kiosk", "Watchlist hit", `${name} · check-in held for security review`); }
-    else if (needsOk) { ping(`Approval request sent to ${host.split(" —")[0]} — walk-in visitor ${name}`); logAudit("Kiosk", "Approval requested", `${name} · walk-in · host ${host.split(" —")[0]}`); }
-    else { ping(`${host.split(" —")[0]} notified: ${name} has arrived`); logAudit("Kiosk", "Check-in", `${name} · ${method} · badge ${badge}`); }
+    if (flagged) addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." });
+    else if (needsOk) ping(`Approval request sent to ${host.split(" —")[0]} — walk-in visitor ${name}`);
+    else ping(`${host.split(" —")[0]} notified: ${name} has arrived`);
     return v;
   };
 
@@ -77,14 +69,12 @@ export default function App() {
     const v = { id: Date.now(), name, company: company || "—", host, purpose, method: `Paper slip ${slipRef}`, badge: "—", zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: "awaiting-approval", hostResponse: null };
     setVisitors((s) => [v, ...s]);
     ping(`Confirmation request sent to ${host.split(" —")[0]}`);
-    logAudit("Reception", "Slip digitized", `${name} · ${slipRef} · awaiting host confirmation`);
   };
 
   const createInvite = (inv) => {
     const ref = `QR-${88216 + invites.length}`;
     setInvites((s) => [...s, { id: Date.now(), ...inv, ref, used: false }]);
     ping(`Invite ${ref} sent to ${inv.name} by email and SMS`);
-    logAudit("Host portal", "Invite created", `${inv.name} · ${ref} · ${inv.purpose}`);
   };
 
   const hostAct = (v, action) => {
@@ -92,25 +82,21 @@ export default function App() {
       const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
       update(v.id, { status: "checked-in", badge, checkinAt: Date.now(), hostResponse: "Approved" });
       ping(`${v.name} approved — badge ${badge} issued at reception`);
-      logAudit(v.host.split(" —")[0], "Approved", `${v.name} · badge ${badge} issued`);
     } else if (action === "Deny") {
       update(v.id, { status: "denied", hostResponse: "Denied" });
       addAlert({ sev: "warning", title: `Entry denied — ${v.name}`, detail: "Host denied the visit. Badge deactivated, reception informed." });
-      logAudit(v.host.split(" —")[0], "Entry denied", `${v.name} · logged for audit`);
     } else {
       update(v.id, { hostResponse: action });
       ping(`Reception told: ${action.toLowerCase()}`);
-      logAudit(v.host.split(" —")[0], "Host response", `${v.name} · "${action}"`);
     }
   };
 
   const addDelivery = (d) => {
     setDeliveries((s) => [{ id: Date.now(), at: Date.now(), collected: false, ...d }, ...s]);
     ping(`${d.host.split(" —")[0]} notified: package from ${d.courier} at reception`);
-    logAudit("Reception", "Delivery logged", `${d.pkg} from ${d.courier} · for ${d.host.split(" —")[0]}`);
   };
   const markCollected = (id) => setDeliveries((s) => s.map((d) => (d.id === id ? { ...d, collected: true } : d)));
-  const kioskCheckout = (v) => { update(v.id, { status: "checked-out" }); ping(`${v.name} checked out — badge ${v.badge} deactivated`); logAudit("Kiosk", "Check-out", `${v.name} · badge ${v.badge} deactivated`); };
+  const kioskCheckout = (v) => { update(v.id, { status: "checked-out" }); ping(`${v.name} checked out — badge ${v.badge} deactivated`); };
 
   const onSite = visitors.filter((v) => v.status === "checked-in" || v.status === "safe");
   const isOver = (v) => v.status === "checked-in" && (Date.now() - v.checkinAt) / 60000 > v.windowMins;
@@ -126,28 +112,6 @@ export default function App() {
   ];
 
   const activeTab = tabs.find((t) => t[0] === view);
-  const isMobile = device === "mobile";
-
-  // Phone frame app identity per tab (used in mobile view)
-  const PHONE_APP = {
-    kiosk: ["Onsite Kiosk", QrCode],
-    reception: ["Onsite Reception", ClipboardList],
-    security: ["Onsite Security", ShieldAlert],
-    host: ["Onsite Host", Bell],
-    admin: ["Onsite Admin", Settings],
-  };
-
-  // Wraps a tab's content in a phone frame when mobile view is on,
-  // otherwise renders it full width for desktop.
-  const Screen = ({ id, children }) => {
-    if (!isMobile) return children;
-    const [appName, AppIcon] = PHONE_APP[id];
-    return (
-      <PhoneFrame appName={appName} AppIcon={AppIcon}>
-        <div className="compact-mobile">{children}</div>
-      </PhoneFrame>
-    );
-  };
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex" style={font}>
@@ -160,8 +124,6 @@ export default function App() {
         .scanline { animation: scanline 2.2s ease-in-out infinite; }
         .livedot { animation: dotblink 1.4s ease-in-out infinite; }
         * { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
-        /* Inside the phone frame, force multi-column grids to a single column */
-        .compact-mobile .grid { grid-template-columns: 1fr !important; }
       `}</style>
 
       <aside className="hidden md:flex md:flex-col w-64 shrink-0 bg-slate-900 text-slate-300 min-h-screen sticky top-0">
@@ -180,19 +142,6 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="px-4 py-3 border-t border-slate-800/60">
-          <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-2">View as</p>
-          <div className="flex bg-slate-800 rounded-lg p-1 gap-1">
-            <button onClick={() => setDevice("desktop")}
-              className={`flex-1 flex items-center justify-center gap-1.5 text-xs rounded-md py-1.5 transition-colors ${!isMobile ? "bg-violet-500 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              <Monitor size={13} /> Desktop
-            </button>
-            <button onClick={() => setDevice("mobile")}
-              className={`flex-1 flex items-center justify-center gap-1.5 text-xs rounded-md py-1.5 transition-colors ${isMobile ? "bg-violet-500 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              <Smartphone size={13} /> Mobile
-            </button>
-          </div>
-        </div>
         <div className="px-4 py-4 border-t border-slate-800/60">
           <div className="flex items-center gap-2 text-xs text-slate-400" style={mono}>
             <span className="w-2 h-2 rounded-full bg-emerald-400 livedot inline-block" /> live · {onSite.length} on site
@@ -201,27 +150,15 @@ export default function App() {
       </aside>
 
       <div className="flex-1 min-w-0">
-        <header className="bg-white border-b border-slate-200 px-4 sm:px-6 sticky top-0 z-30">
-          <div className="h-16 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="md:hidden bg-violet-500 rounded-lg p-1.5 shrink-0"><ShieldAlert size={16} className="text-white" /></div>
-              <div className="min-w-0">
-                <h1 className="text-base font-semibold text-slate-800 truncate">{activeTab ? activeTab[1] : ""}</h1>
-                <p className="text-xs text-slate-400 hidden sm:block">Onsite — visitor management prototype</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 shrink-0" title="Switch between desktop and mobile preview">
-              <button onClick={() => setDevice("desktop")}
-                className={`flex items-center gap-1.5 text-xs rounded-md px-2.5 py-1.5 transition-colors ${!isMobile ? "bg-white shadow-sm text-violet-700 font-medium" : "text-slate-500 hover:text-slate-700"}`}>
-                <Monitor size={14} /> <span className="hidden sm:inline">Desktop</span>
-              </button>
-              <button onClick={() => setDevice("mobile")}
-                className={`flex items-center gap-1.5 text-xs rounded-md px-2.5 py-1.5 transition-colors ${isMobile ? "bg-white shadow-sm text-violet-700 font-medium" : "text-slate-500 hover:text-slate-700"}`}>
-                <Smartphone size={14} /> <span className="hidden sm:inline">Mobile</span>
-              </button>
+        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
+          <div className="flex items-center gap-3">
+            <div className="md:hidden bg-violet-500 rounded-lg p-1.5"><ShieldAlert size={16} className="text-white" /></div>
+            <div>
+              <h1 className="text-base font-semibold text-slate-800">{activeTab ? activeTab[1] : ""}</h1>
+              <p className="text-xs text-slate-400 hidden sm:block">Onsite — visitor management prototype</p>
             </div>
           </div>
-          <nav className="md:hidden flex gap-1 overflow-x-auto pb-2 -mt-1">
+          <nav className="md:hidden flex gap-1 overflow-x-auto">
             {tabs.map(([id, label, Icon, count]) => (
               <button key={id} onClick={() => setView(id)}
                 className={`relative flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap ${view === id ? "bg-violet-50 text-violet-700 font-medium" : "text-slate-500"}`}>
@@ -238,32 +175,20 @@ export default function App() {
           </div>
         )}
 
-        <main className={`${isMobile ? "max-w-md" : "max-w-4xl"} mx-auto p-4 sm:p-6`}>
-          {view === "kiosk" && (
-            <Screen id="kiosk">
-              <Kiosk checkIn={checkIn} invites={invites} visitors={visitors} kioskCheckout={kioskCheckout} compact={isMobile} />
-            </Screen>
-          )}
-          {view === "reception" && (
-            <Screen id="reception">
-              <Reception slipEntry={slipEntry} visitors={visitors} isOver={isOver} addDelivery={addDelivery} deliveries={deliveries} />
-            </Screen>
-          )}
+        <main className="max-w-4xl mx-auto p-4 sm:p-6">
+          {view === "kiosk" && <Kiosk checkIn={checkIn} invites={invites} visitors={visitors} kioskCheckout={kioskCheckout} />}
+          {view === "reception" && <Reception slipEntry={slipEntry} visitors={visitors} isOver={isOver} addDelivery={addDelivery} deliveries={deliveries} />}
           {view === "security" && (
-            <Screen id="security">
+            <PhoneFrame appName="Onsite Security" AppIcon={ShieldAlert}>
               <Security visitors={visitors} onSite={onSite} isOver={isOver} alerts={alerts} setAlerts={setAlerts} update={update} evac={evac} setEvac={setEvac} addAlert={addAlert} ping={ping} />
-            </Screen>
+            </PhoneFrame>
           )}
           {view === "host" && (
-            <Screen id="host">
+            <PhoneFrame appName="Onsite Host" AppIcon={Bell}>
               <HostApp pending={pendingHost} recent={visitors} hostAct={hostAct} createInvite={createInvite} invites={invites} deliveries={deliveries} markCollected={markCollected} />
-            </Screen>
+            </PhoneFrame>
           )}
-          {view === "admin" && (
-            <Screen id="admin">
-              <Admin watchlist={watchlist} setWatchlist={setWatchlist} audit={audit} visitors={visitors} logAudit={logAudit} ping={ping} />
-            </Screen>
-          )}
+          {view === "admin" && <Admin watchlist={watchlist} setWatchlist={setWatchlist} />}
         </main>
       </div>
 
@@ -322,7 +247,7 @@ function StatusPill({ v, isOver }) {
 }
 
 /* ================= Kiosk ================= */
-function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
+function Kiosk({ checkIn, invites, visitors, kioskCheckout }) {
   const [step, setStep] = useState("home");
   const [method, setMethod] = useState("");
   const [f, setF] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null });
@@ -430,7 +355,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   const dotIdx = step === "qr" || step === "face" ? 0 : Math.max(0, dots.indexOf(step === "printing" ? "badge" : step));
 
   return (
-    <div className={`bg-slate-200 rounded-2xl relative ${compact ? "p-2" : "p-4 sm:p-6"}`}>
+    <div className="bg-slate-200 rounded-2xl p-4 sm:p-6 relative">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2 text-sm text-slate-600"><Building2 size={16} /> Main lobby kiosk</div>
         <div className="flex gap-1.5">{dots.map((d, i) => <span key={d} className={`w-2 h-2 rounded-full ${i === dotIdx ? "bg-emerald-600" : "bg-slate-400"}`} />)}</div>
@@ -446,7 +371,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
               </button>
             </div>
             <p className="text-sm text-slate-500 mb-5">{t.how}</p>
-            <div className={`grid gap-3 ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`} style={compact ? { gridTemplateColumns: "1fr 1fr" } : undefined}>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[[t.qr, "Scan QR invite", QrCode], [t.face, "Face check-in", ScanFace], [t.idd, "Scan ID document", CreditCard], [t.walk, "Walk-in visitor", UserPlus]].map(([label, key, Icon]) => (
                 <button key={key} onClick={() => pick(key)} className="flex flex-col items-center gap-2 border border-slate-300 rounded-xl py-5 px-2 hover:border-violet-500 hover:bg-violet-50">
                   <Icon size={26} className="text-slate-700" /><span className="text-xs text-center">{label}</span>
@@ -738,16 +663,16 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
         ))}
       </Card>
 
-      <button onClick={() => setChatOpen(true)} className={`absolute bg-violet-500 text-white rounded-full p-3 hover:bg-violet-600 shadow ${compact ? "bottom-3 right-3" : "bottom-6 right-6"}`} title="AI assistant">
+      <button onClick={() => setChatOpen(true)} className="absolute bottom-6 right-6 bg-violet-500 text-white rounded-full p-3 hover:bg-violet-600 shadow" title="AI assistant">
         <Sparkles size={20} />
       </button>
-      {chatOpen && <KioskAssistant onClose={() => setChatOpen(false)} compact={compact} />}
+      {chatOpen && <KioskAssistant onClose={() => setChatOpen(false)} />}
     </div>
   );
 }
 
 /* ================= AI kiosk assistant (scripted demo) ================= */
-function KioskAssistant({ onClose, compact = false }) {
+function KioskAssistant({ onClose }) {
   const [msgs, setMsgs] = useState([{ who: "bot", text: "Hi, I'm the lobby assistant. Ask me about wifi, parking, restrooms, coffee, or what to do if your host is late." }]);
   const [input, setInput] = useState("");
   const reply = (q) => {
@@ -768,10 +693,10 @@ function KioskAssistant({ onClose, compact = false }) {
     setTimeout(() => setMsgs((m) => [...m, { who: "bot", text: reply(q) }]), 500);
   };
   return (
-    <div className={`absolute bg-white border border-slate-300 rounded-xl shadow-lg flex flex-col overflow-hidden z-40 ${compact ? "bottom-16 right-2 left-2" : "bottom-20 right-6 w-72"}`}>
+    <div className="absolute bottom-20 right-6 w-72 bg-white border border-slate-300 rounded-xl shadow-lg flex flex-col overflow-hidden z-40">
       <div className="flex items-center justify-between bg-violet-500 text-white px-3 py-2">
-        <span className="text-sm flex items-center gap-1.5"><Sparkles size={14} className="text-violet-200" /> Lobby assistant</span>
-        <button onClick={onClose} className="text-violet-100 hover:text-white"><X size={15} /></button>
+        <span className="text-sm flex items-center gap-1.5"><Sparkles size={14} className="text-violet-400" /> Lobby assistant</span>
+        <button onClick={onClose} className="text-slate-300 hover:text-white"><X size={15} /></button>
       </div>
       <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
         {msgs.map((m, i) => (
@@ -944,7 +869,7 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {[["On site now", onSite.length], ["Expected today", onSite.length + 17], ["Checked out", out + 12], ["Active alerts", active.length + overs.length, active.length + overs.length > 0]].map(([label, val, danger]) => (
           <div key={label} className="bg-white border border-slate-200 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">{label}</p>
@@ -976,7 +901,7 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
       <Card>
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2"><Camera size={16} /> AI camera alerts</h2>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2">
             <button onClick={simulate} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate camera event</button>
             <button onClick={() => setEvac(true)} className="text-xs bg-rose-600 text-white rounded-lg px-3 py-1.5 hover:bg-rose-500 flex items-center gap-1"><Siren size={13} /> Start evacuation</button>
           </div>
@@ -1042,7 +967,7 @@ function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, 
     setTimeout(() => setMade(null), 4000);
   };
   return (
-    <div className="grid lg:grid-cols-2 gap-4 items-start">
+    <div className="space-y-4">
       <Card>
         <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><CalendarPlus size={18} /> Pre-register a visitor</h2>
         <p className="text-xs text-slate-500 mb-4">Creates an invite with a QR pass. Then go to the Kiosk tab, tap "Scan QR invite", and check them in with it.</p>
@@ -1142,204 +1067,9 @@ function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, 
 }
 
 /* ================= Admin ================= */
-const ROLE_PERMS = ["View visitors", "Approve / deny", "Manage watchlist", "Run evacuation", "Export reports", "Admin settings"];
-const seedUsers = [
-  { id: 1, name: "Priya Nair", email: "priya.n@acme.com", role: "Security admin", perms: [true, true, true, true, true, true] },
-  { id: 2, name: "David Lee", email: "david.l@acme.com", role: "Security officer", perms: [true, true, false, true, false, false] },
-  { id: 3, name: "Kavita Shah", email: "kavita.s@acme.com", role: "Front desk", perms: [true, true, false, false, false, false] },
-  { id: 4, name: "Rohan Gupta", email: "rohan.g@acme.com", role: "Compliance manager", perms: [true, false, false, false, true, false] },
-];
-const ROLES = ["Front desk", "Security officer", "Security admin", "Compliance manager", "IT admin"];
-
-function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
-  const [sub, setSub] = useState("policies");
-  const subs = [
-    ["policies", "Watchlist & zones", Eye],
-    ["auditlog", "Audit log & reports", FileText],
-    ["users", "Users & roles", Users],
-    ["retention", "Data retention", Clock],
-  ];
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 overflow-x-auto">
-        {subs.map(([id, label, Icon]) => (
-          <button key={id} onClick={() => setSub(id)}
-            className={`flex items-center gap-1.5 text-xs rounded-lg px-3 py-2 whitespace-nowrap transition-colors ${sub === id ? "bg-violet-500 text-white font-medium" : "text-slate-500 hover:bg-slate-100"}`}>
-            <Icon size={14} /> {label}
-          </button>
-        ))}
-      </div>
-      {sub === "policies" && <AdminPolicies watchlist={watchlist} setWatchlist={setWatchlist} logAudit={logAudit} />}
-      {sub === "auditlog" && <AdminAudit audit={audit} visitors={visitors} ping={ping} logAudit={logAudit} />}
-      {sub === "users" && <AdminUsers logAudit={logAudit} ping={ping} />}
-      {sub === "retention" && <AdminRetention visitors={visitors} logAudit={logAudit} ping={ping} />}
-    </div>
-  );
-}
-
-/* --- Audit log & reports --- */
-function AdminAudit({ audit, visitors, ping, logAudit }) {
-  const [filter, setFilter] = useState("All");
-  const [q, setQ] = useState("");
-  const types = ["All", ...Array.from(new Set(audit.map((a) => a.action)))];
-  const rows = audit.filter((a) => (filter === "All" || a.action === filter) && (a.actor + a.action + a.detail).toLowerCase().includes(q.toLowerCase()));
-  const exportCsv = () => {
-    const csv = ["Time,Actor,Action,Detail", ...audit.map((a) => `"${new Date(a.at).toLocaleString()}","${a.actor}","${a.action}","${a.detail.replace(/"/g, '""')}"`)].join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const link = document.createElement("a"); link.href = url; link.download = "visitor-audit-log.csv"; link.click();
-    URL.revokeObjectURL(url);
-    logAudit("Admin", "Report exported", `Audit log CSV · ${audit.length} entries`);
-    ping("Audit log exported as CSV");
-  };
-  const denied = visitors.filter((v) => v.status === "denied").length;
-  const held = visitors.filter((v) => v.status === "held").length;
-  const done = visitors.filter((v) => v.status === "checked-out").length;
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[["Audit entries", audit.length], ["Denied entries", denied, denied > 0], ["Held for review", held, held > 0], ["Completed visits", done + 12]].map(([label, val, danger]) => (
-          <div key={label} className="bg-white border border-slate-200 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">{label}</p>
-            <p className={`text-2xl font-medium ${danger ? "text-rose-600" : ""}`} style={mono}>{val}</p>
-          </div>
-        ))}
-      </div>
-      <Card>
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2"><FileText size={18} /> Audit log</h2>
-          <button onClick={exportCsv} className="text-xs bg-violet-500 text-white rounded-lg px-3 py-2 hover:bg-violet-600 flex items-center gap-1.5"><FileText size={13} /> Export CSV</button>
-        </div>
-        <p className="text-xs text-slate-500 mb-3">Every identity decision — check-ins, approvals, denials, watchlist hits, and overrides — recorded with actor, timestamp, and reason. Entries are immutable.</p>
-        <div className="flex gap-2 mb-3 flex-wrap">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, badge, action…" className="flex-1 min-w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-          <select value={filter} onChange={(e) => setFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">
-            {types.map((t) => <option key={t}>{t}</option>)}
-          </select>
-        </div>
-        <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
-          {rows.map((a) => (
-            <div key={a.id} className="flex items-start gap-3 py-2.5">
-              <span className="text-xs text-slate-400 w-16 shrink-0 pt-0.5" style={mono}>{fmt(a.at)}</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm"><span className={a.action.includes("denied") || a.action.includes("Watchlist") ? "text-rose-700 font-medium" : "font-medium"}>{a.action}</span> <span className="text-slate-400">by {a.actor}</span></p>
-                <p className="text-xs text-slate-500 truncate">{a.detail}</p>
-              </div>
-            </div>
-          ))}
-          {rows.length === 0 && <p className="text-sm text-slate-400 py-3">No entries match.</p>}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-/* --- Users & roles (RBAC) --- */
-function AdminUsers({ logAudit, ping }) {
-  const [users, setUsers] = useState(seedUsers);
-  const [nu, setNu] = useState({ name: "", role: ROLES[0] });
-  const ROLE_DEFAULTS = { "Front desk": [true, true, false, false, false, false], "Security officer": [true, true, false, true, false, false], "Security admin": [true, true, true, true, true, true], "Compliance manager": [true, false, false, false, true, false], "IT admin": [false, false, false, false, false, true] };
-  const toggle = (uid, i) => {
-    setUsers((s) => s.map((u) => (u.id === uid ? { ...u, perms: u.perms.map((p, j) => (j === i ? !p : p)) } : u)));
-    const u = users.find((x) => x.id === uid);
-    logAudit("Admin", "Permission changed", `${u.name} · ${ROLE_PERMS[i]} ${u.perms[i] ? "revoked" : "granted"}`);
-  };
-  const add = () => {
-    if (!nu.name.trim()) return;
-    setUsers((s) => [...s, { id: Date.now(), name: nu.name.trim(), email: `${nu.name.trim().toLowerCase().split(" ")[0]}@acme.com`, role: nu.role, perms: [...ROLE_DEFAULTS[nu.role]] }]);
-    logAudit("Admin", "User added", `${nu.name.trim()} · role ${nu.role}`);
-    ping(`${nu.name.trim()} added with ${nu.role} role`);
-    setNu({ name: "", role: ROLES[0] });
-  };
-  const remove = (u) => { setUsers((s) => s.filter((x) => x.id !== u.id)); logAudit("Admin", "User removed", `${u.name} · ${u.role}`); };
-  return (
-    <Card>
-      <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Users size={18} /> Users & roles</h2>
-      <p className="text-xs text-slate-500 mb-4">Role-based access control with granular permissions. Every change is written to the audit log.</p>
-      <div className="flex gap-2 mb-5 flex-wrap">
-        <input value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Full name" className="flex-1 min-w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-        <select value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{ROLES.map((r) => <option key={r}>{r}</option>)}</select>
-        <button onClick={add} className="text-sm bg-violet-500 text-white rounded-lg px-4 py-2 hover:bg-violet-600">Add user</button>
-      </div>
-      <div className="space-y-3">
-        {users.map((u) => (
-          <div key={u.id} className="border border-slate-200 rounded-xl p-3">
-            <div className="flex items-center gap-3 mb-2 flex-wrap">
-              <Avatar name={u.name} tone="bg-violet-100 text-violet-800" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{u.name}</p>
-                <p className="text-xs text-slate-500 truncate">{u.email}</p>
-              </div>
-              <Pill tone="purple">{u.role}</Pill>
-              <button onClick={() => remove(u)} className="text-xs text-rose-700 hover:underline">Remove</button>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {ROLE_PERMS.map((p, i) => (
-                <button key={p} onClick={() => toggle(u.id, i)}
-                  className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${u.perms[i] ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
-                  {u.perms[i] ? "✓ " : ""}{p}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-/* --- Data retention / DPDP --- */
-function AdminRetention({ visitors, logAudit, ping }) {
-  const [days, setDays] = useState(90);
-  const [autoPurge, setAutoPurge] = useState(true);
-  const [biometricDays, setBiometricDays] = useState(7);
-  const [purged, setPurged] = useState(1240);
-  const consents = visitors.length + 38;
-  const eligible = visitors.filter((v) => v.status === "checked-out" || v.status === "denied").length + 12;
-  const purgeNow = () => {
-    setPurged((n) => n + eligible);
-    logAudit("Admin", "Data purged", `${eligible} expired visit records erased · retention ${days} days`);
-    ping(`${eligible} expired records purged — logged to audit trail`);
-  };
-  return (
-    <div className="grid lg:grid-cols-2 gap-4">
-      <Card>
-        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Clock size={18} /> Retention policy</h2>
-        <p className="text-xs text-slate-500 mb-4">DPDP Act 2023 — visitor data is kept only as long as needed, then erased automatically with an audit trail.</p>
-        <label className="text-xs text-slate-500 block mb-4">Visit records retention: <span className="font-medium text-slate-800" style={mono}>{days} days</span>
-          <input type="range" min="30" max="365" step="30" value={days} onChange={(e) => { setDays(+e.target.value); }} onMouseUp={() => logAudit("Admin", "Policy changed", `Visit record retention set to ${days} days`)} className="w-full mt-2 accent-violet-500" />
-          <span className="flex justify-between text-xs text-slate-400"><span>30 d</span><span>365 d</span></span>
-        </label>
-        <label className="text-xs text-slate-500 block mb-4">Raw biometric images purged after: <span className="font-medium text-slate-800" style={mono}>{biometricDays} days</span>
-          <input type="range" min="1" max="30" value={biometricDays} onChange={(e) => setBiometricDays(+e.target.value)} className="w-full mt-2 accent-violet-500" />
-          <span className="block text-xs text-slate-400 mt-1">Encrypted templates are kept; raw face/ID images are deleted first.</span>
-        </label>
-        <button onClick={() => { setAutoPurge(!autoPurge); logAudit("Admin", "Policy changed", `Auto-purge ${autoPurge ? "disabled" : "enabled"}`); }}
-          className={`w-full flex items-center justify-between border rounded-lg px-3 py-2.5 text-sm ${autoPurge ? "border-emerald-300 bg-emerald-50" : "border-slate-300"}`}>
-          <span>Automatic purge on schedule</span>
-          <Pill tone={autoPurge ? "green" : "gray"}>{autoPurge ? "On · nightly 02:00" : "Off"}</Pill>
-        </button>
-      </Card>
-      <Card>
-        <h2 className="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2"><ShieldAlert size={18} /> Consent & erasure status</h2>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          {[["Consent records", consents], ["Eligible for purge", eligible], ["Erased to date", purged], ["Erasure requests", 3]].map(([label, val]) => (
-            <div key={label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <p className="text-xs text-slate-500 mb-1">{label}</p>
-              <p className="text-xl font-medium" style={mono}>{val}</p>
-            </div>
-          ))}
-        </div>
-        <button onClick={purgeNow} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600 mb-2">Run purge now</button>
-        <p className="text-xs text-slate-400">Every purge writes an entry to the audit log with count, policy, and actor. Right-to-erasure requests are handled the same way, per visitor.</p>
-      </Card>
-    </div>
-  );
-}
-
-/* --- Watchlist & zone policies (previous Admin content) --- */
-function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
+function Admin({ watchlist, setWatchlist }) {
   const [name, setName] = useState("");
-  const add = () => { if (name.trim()) { setWatchlist((s) => [...s, name.trim()]); logAudit("Admin", "Watchlist updated", `Added "${name.trim()}"`); setName(""); } };
+  const add = () => { if (name.trim()) { setWatchlist((s) => [...s, name.trim()]); setName(""); } };
   return (
     <div className="grid lg:grid-cols-2 gap-4">
       <Card>
@@ -1353,7 +1083,7 @@ function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
           {watchlist.map((w) => (
             <div key={w} className="flex items-center justify-between bg-rose-50 rounded-lg px-3 py-2">
               <span className="text-sm text-rose-800">{w}</span>
-              <button onClick={() => { setWatchlist((s) => s.filter((x) => x !== w)); logAudit("Admin", "Watchlist updated", `Removed "${w}"`); }} className="text-xs text-rose-700 hover:underline">Remove</button>
+              <button onClick={() => setWatchlist((s) => s.filter((x) => x !== w))} className="text-xs text-rose-700 hover:underline">Remove</button>
             </div>
           ))}
           {watchlist.length === 0 && <p className="text-sm text-slate-400">Watchlist is empty.</p>}
