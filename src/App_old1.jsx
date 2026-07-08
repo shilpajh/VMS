@@ -4,7 +4,7 @@ import {
   Bell, ShieldAlert, Eye, Camera, LogOut, Siren, FileText, Users, Building2,
   ClipboardList, AlertTriangle, UserCheck, UserX, Clock, Printer, Settings,
   Send, Sparkles, ScanLine, CalendarPlus, Ticket, X, MapPin,
-  Package, Star, Globe, BarChart3, Wifi, Battery, Signal, Monitor, Smartphone, Phone, Wallet, WifiOff,
+  Package, Star, Globe, BarChart3, Wifi, Battery, Signal, Monitor, Smartphone,
 } from "lucide-react";
 
 const HOSTS = ["Rahul Mehta — Engineering", "Sara Khan — HR", "David Lee — Security", "Anita Rao — Finance"];
@@ -25,7 +25,7 @@ const seedVisitors = [
 ];
 
 const seedInvites = [
-  { id: 1, name: "Arjun Patel", company: "Zenith Consulting", host: HOSTS[3], purpose: "Vendor visit", ref: "QR-88214", used: false, preup: true },
+  { id: 1, name: "Arjun Patel", company: "Zenith Consulting", host: HOSTS[3], purpose: "Vendor visit", ref: "QR-88214", used: false },
   { id: 2, name: "Lena Fischer", company: "Nordwind GmbH", host: HOSTS[0], purpose: "Business meeting", ref: "QR-88215", used: false },
 ];
 
@@ -69,7 +69,7 @@ export default function App() {
     if (inviteId) setInvites((s) => s.map((i) => (i.id === inviteId ? { ...i, used: true } : i)));
     if (flagged) { addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." }); logAudit("Kiosk", "Watchlist hit", `${name} · check-in held for security review`); }
     else if (needsOk) { ping(`Approval request sent to ${host.split(" —")[0]} — walk-in visitor ${name}`); logAudit("Kiosk", "Approval requested", `${name} · walk-in · host ${host.split(" —")[0]}`); }
-    else { ping(`${host.split(" —")[0]} notified on WhatsApp: ${name} has arrived`); logAudit("Kiosk", "Check-in", `${name} · ${method} · badge ${badge}`); }
+    else { ping(`${host.split(" —")[0]} notified: ${name} has arrived`); logAudit("Kiosk", "Check-in", `${name} · ${method} · badge ${badge}`); }
     return v;
   };
 
@@ -83,7 +83,7 @@ export default function App() {
   const createInvite = (inv) => {
     const ref = `QR-${88216 + invites.length}`;
     setInvites((s) => [...s, { id: Date.now(), ...inv, ref, used: false }]);
-    ping(`Invite ${ref} sent to ${inv.name} on WhatsApp, email and SMS`);
+    ping(`Invite ${ref} sent to ${inv.name} by email and SMS`);
     logAudit("Host portal", "Invite created", `${inv.name} · ${ref} · ${inv.purpose}`);
   };
 
@@ -112,19 +112,6 @@ export default function App() {
   const markCollected = (id) => setDeliveries((s) => s.map((d) => (d.id === id ? { ...d, collected: true } : d)));
   const kioskCheckout = (v) => { update(v.id, { status: "checked-out" }); ping(`${v.name} checked out — badge ${v.badge} deactivated`); logAudit("Kiosk", "Check-out", `${v.name} · badge ${v.badge} deactivated`); };
 
-  const securityRelease = (v, ok) => {
-    if (ok) {
-      const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
-      update(v.id, { status: "checked-in", badge, checkinAt: Date.now(), flagged: false });
-      ping(`Security released ${v.name} — badge ${badge} issued`);
-      logAudit("Security", "Held approved", `${v.name} · manual review passed · badge ${badge}`);
-    } else {
-      update(v.id, { status: "denied", hostResponse: "Denied by security" });
-      ping(`${v.name} rejected after security review`);
-      logAudit("Security", "Held rejected", `${v.name} · entry denied · logged for audit`);
-    }
-  };
-
   const onSite = visitors.filter((v) => v.status === "checked-in" || v.status === "safe");
   const isOver = (v) => v.status === "checked-in" && (Date.now() - v.checkinAt) / 60000 > v.windowMins;
   const activeAlerts = alerts.filter((a) => !a.reviewed).length + onSite.filter(isOver).length;
@@ -140,6 +127,27 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t[0] === view);
   const isMobile = device === "mobile";
+
+  // Phone frame app identity per tab (used in mobile view)
+  const PHONE_APP = {
+    kiosk: ["Onsite Kiosk", QrCode],
+    reception: ["Onsite Reception", ClipboardList],
+    security: ["Onsite Security", ShieldAlert],
+    host: ["Onsite Host", Bell],
+    admin: ["Onsite Admin", Settings],
+  };
+
+  // Wraps a tab's content in a phone frame when mobile view is on,
+  // otherwise renders it full width for desktop.
+  const Screen = ({ id, children }) => {
+    if (!isMobile) return children;
+    const [appName, AppIcon] = PHONE_APP[id];
+    return (
+      <PhoneFrame appName={appName} AppIcon={AppIcon}>
+        <div className="compact-mobile">{children}</div>
+      </PhoneFrame>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex" style={font}>
@@ -232,27 +240,27 @@ export default function App() {
 
         <main className={`${isMobile ? "max-w-md" : "max-w-4xl"} mx-auto p-4 sm:p-6`}>
           {view === "kiosk" && (
-            <Screen id="kiosk" isMobile={isMobile}>
+            <Screen id="kiosk">
               <Kiosk checkIn={checkIn} invites={invites} visitors={visitors} kioskCheckout={kioskCheckout} compact={isMobile} />
             </Screen>
           )}
           {view === "reception" && (
-            <Screen id="reception" isMobile={isMobile}>
+            <Screen id="reception">
               <Reception slipEntry={slipEntry} visitors={visitors} isOver={isOver} addDelivery={addDelivery} deliveries={deliveries} />
             </Screen>
           )}
           {view === "security" && (
-            <Screen id="security" isMobile={isMobile}>
-              <Security visitors={visitors} onSite={onSite} isOver={isOver} alerts={alerts} setAlerts={setAlerts} update={update} evac={evac} setEvac={setEvac} addAlert={addAlert} ping={ping} securityRelease={securityRelease} />
+            <Screen id="security">
+              <Security visitors={visitors} onSite={onSite} isOver={isOver} alerts={alerts} setAlerts={setAlerts} update={update} evac={evac} setEvac={setEvac} addAlert={addAlert} ping={ping} />
             </Screen>
           )}
           {view === "host" && (
-            <Screen id="host" isMobile={isMobile}>
+            <Screen id="host">
               <HostApp pending={pendingHost} recent={visitors} hostAct={hostAct} createInvite={createInvite} invites={invites} deliveries={deliveries} markCollected={markCollected} />
             </Screen>
           )}
           {view === "admin" && (
-            <Screen id="admin" isMobile={isMobile}>
+            <Screen id="admin">
               <Admin watchlist={watchlist} setWatchlist={setWatchlist} audit={audit} visitors={visitors} logAudit={logAudit} ping={ping} />
             </Screen>
           )}
@@ -278,28 +286,6 @@ function Pill({ tone, children }) {
 const Avatar = ({ name, tone = "bg-emerald-100 text-emerald-800", size = "w-9 h-9" }) => (
   <div className={`${size} rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${tone}`}>{initials(name)}</div>
 );
-
-// Phone frame app identity per tab (used in mobile view)
-const PHONE_APP = {
-  kiosk: ["Onsite Kiosk", QrCode],
-  reception: ["Onsite Reception", ClipboardList],
-  security: ["Onsite Security", ShieldAlert],
-  host: ["Onsite Host", Bell],
-  admin: ["Onsite Admin", Settings],
-};
-
-// Wraps a tab's content in a phone frame when mobile view is on.
-// Defined at module level so its identity is stable across App re-renders —
-// otherwise React remounts the subtree (resetting kiosk state) on every tick.
-function Screen({ id, isMobile, children }) {
-  if (!isMobile) return children;
-  const [appName, AppIcon] = PHONE_APP[id];
-  return (
-    <PhoneFrame appName={appName} AppIcon={AppIcon}>
-      <div className="compact-mobile">{children}</div>
-    </PhoneFrame>
-  );
-}
 
 function PhoneFrame({ appName, AppIcon, accent = "bg-slate-900", children }) {
   return (
@@ -352,19 +338,10 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   const [pendingId, setPendingId] = useState(null);
   const [lang, setLang] = useState("en");
   const [rating, setRating] = useState(0);
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpPhase, setOtpPhase] = useState(0);
-  const [escalated, setEscalated] = useState(false);
-  const [walletAdded, setWalletAdded] = useState(false);
-  const [offline, setOffline] = useState(false);
-  const [hq1, setHq1] = useState(false);
-  const [hq2, setHq2] = useState(false);
 
   const T = {
-    en: { welcome: "Welcome to Acme Corp", how: "How would you like to check in?", qr: "Scan QR invite", face: "Face check-in", idd: "Scan ID document", otp: "Phone number / OTP", walk: "Walk-in visitor", out: "Leaving? Tap here to check out", hint: "Paper gate pass? A receptionist will scan and verify it — see the Reception tab. Questions? Tap the assistant at the bottom right." },
-    hi: { welcome: "एक्मे कॉर्प में आपका स्वागत है", how: "आप कैसे चेक-इन करना चाहेंगे?", qr: "QR निमंत्रण स्कैन करें", face: "फेस चेक-इन", idd: "पहचान पत्र स्कैन करें", otp: "फ़ोन नंबर / OTP", walk: "वॉक-इन आगंतुक", out: "जा रहे हैं? चेक-आउट के लिए यहाँ टैप करें", hint: "कागज़ का गेट पास है? रिसेप्शन डेस्क पर जाएँ — वे स्कैन करके सत्यापित करेंगे।" },
-    ta: { welcome: "அக்மே கார்ப்-க்கு வரவேற்கிறோம்", how: "எப்படி செக்-இன் செய்ய விரும்புகிறீர்கள்?", qr: "QR அழைப்பை ஸ்கேன் செய்க", face: "முக செக்-இன்", idd: "அடையாள ஆவணத்தை ஸ்கேன் செய்க", otp: "தொலைபேசி எண் / OTP", walk: "நேரடி பார்வையாளர்", out: "வெளியேறுகிறீர்களா? செக்-அவுட் செய்ய தட்டவும்", hint: "காகித கேட் பாஸ் உள்ளதா? வரவேற்பு மேசைக்குச் செல்லவும் — அவர்கள் ஸ்கேன் செய்து சரிபார்ப்பார்கள்." },
+    en: { welcome: "Welcome to Acme Corp", how: "How would you like to check in?", qr: "Scan QR invite", face: "Face check-in", idd: "Scan ID document", walk: "Walk-in visitor", out: "Leaving? Tap here to check out", hint: "Paper gate pass? A receptionist will scan and verify it — see the Reception tab. Questions? Tap the assistant at the bottom right." },
+    hi: { welcome: "एक्मे कॉर्प में आपका स्वागत है", how: "आप कैसे चेक-इन करना चाहेंगे?", qr: "QR निमंत्रण स्कैन करें", face: "फेस चेक-इन", idd: "पहचान पत्र स्कैन करें", walk: "वॉक-इन आगंतुक", out: "जा रहे हैं? चेक-आउट के लिए यहाँ टैप करें", hint: "कागज़ का गेट पास है? रिसेप्शन डेस्क पर जाएँ — वे स्कैन करके सत्यापित करेंगे।" },
   };
   const t = T[lang];
 
@@ -382,13 +359,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
     }
   }, [step, pending, pendingStatus]);
 
-  useEffect(() => {
-    if (step !== "waiting") { setEscalated(false); return; }
-    const t = setTimeout(() => setEscalated(true), 15000);
-    return () => clearTimeout(t);
-  }, [step]);
-
-  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); setPhone(""); setOtp(""); setOtpPhase(0); setEscalated(false); setWalletAdded(false); setHq1(false); setHq2(false); };
+  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); };
 
   const takePhoto = () => {
     setCount(3);
@@ -409,7 +380,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
     if (m === "Scan QR invite") setStep("qr");
     else if (m === "Face check-in") { setStep("face"); runFace(); }
     else if (m === "Scan ID document") { setStep("idscan"); setIdPhase(0); }
-    else if (m === "Phone / OTP") { setStep("otp"); setOtpPhase(0); setPhone(""); setOtp(""); }
     else { setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); }
   };
 
@@ -441,7 +411,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
     setScanMsg(`Reading pass ${inv.ref}…`);
     setTimeout(() => {
       setScanMsg("");
-      setF({ name: inv.name, company: inv.company, host: inv.host, purpose: inv.purpose, inviteId: inv.id, preup: inv.preup });
+      setF({ name: inv.name, company: inv.company, host: inv.host, purpose: inv.purpose, inviteId: inv.id });
       setStep("details");
     }, 900);
   };
@@ -449,7 +419,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   const toNda = () => { if (!f.name.trim()) { setErr("Enter the visitor's full name"); return; } setErr(""); setStep("nda"); };
   const sign = () => {
     if (!agree || !dpdp) { setErr("Tick both the agreement and data-consent boxes to continue"); return; }
-    if (f.purpose === "Contractor work" && (!hq1 || !hq2)) { setErr("Complete the contractor safety questionnaire to continue"); return; }
     setErr("");
     if (isWalkIn) { setStep("photo"); return; }
     setStep("printing");
@@ -464,27 +433,21 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
     <div className={`bg-slate-200 rounded-2xl relative ${compact ? "p-2" : "p-4 sm:p-6"}`}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2 text-sm text-slate-600"><Building2 size={16} /> Main lobby kiosk</div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setOffline(!offline)} className={`flex items-center gap-1 text-[10px] rounded-full px-2 py-1 border ${offline ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-300 text-slate-500 hover:bg-slate-100"}`}>
-            {offline ? <WifiOff size={11} /> : <Wifi size={11} />} {offline ? "Offline" : "Online"}
-          </button>
-          <div className="flex gap-1.5">{dots.map((d, i) => <span key={d} className={`w-2 h-2 rounded-full ${i === dotIdx ? "bg-emerald-600" : "bg-slate-400"}`} />)}</div>
-        </div>
+        <div className="flex gap-1.5">{dots.map((d, i) => <span key={d} className={`w-2 h-2 rounded-full ${i === dotIdx ? "bg-emerald-600" : "bg-slate-400"}`} />)}</div>
       </div>
-      {offline && <div className="mb-3 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 flex items-center gap-2"><WifiOff size={13} /> Offline mode — check-ins continue locally on this kiosk and sync automatically when connectivity returns.</div>}
 
       <Card className="min-h-96">
         {step === "home" && (
           <>
             <div className="flex items-start justify-between mb-1">
               <h2 className="text-xl font-semibold text-slate-800">{t.welcome}</h2>
-              <button onClick={() => setLang(lang === "en" ? "hi" : lang === "hi" ? "ta" : "en")} className="flex items-center gap-1 text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 hover:bg-slate-100">
-                <Globe size={13} /> {lang === "en" ? "हिन्दी" : lang === "hi" ? "தமிழ்" : "English"}
+              <button onClick={() => setLang(lang === "en" ? "hi" : "en")} className="flex items-center gap-1 text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 hover:bg-slate-100">
+                <Globe size={13} /> {lang === "en" ? "हिन्दी" : "English"}
               </button>
             </div>
             <p className="text-sm text-slate-500 mb-5">{t.how}</p>
-            <div className={`grid gap-3 ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3"}`} style={compact ? { gridTemplateColumns: "1fr 1fr" } : undefined}>
-              {[[t.qr, "Scan QR invite", QrCode], [t.face, "Face check-in", ScanFace], [t.idd, "Scan ID document", CreditCard], [t.otp, "Phone / OTP", Phone], [t.walk, "Walk-in visitor", UserPlus]].map(([label, key, Icon]) => (
+            <div className={`grid gap-3 ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`} style={compact ? { gridTemplateColumns: "1fr 1fr" } : undefined}>
+              {[[t.qr, "Scan QR invite", QrCode], [t.face, "Face check-in", ScanFace], [t.idd, "Scan ID document", CreditCard], [t.walk, "Walk-in visitor", UserPlus]].map(([label, key, Icon]) => (
                 <button key={key} onClick={() => pick(key)} className="flex flex-col items-center gap-2 border border-slate-300 rounded-xl py-5 px-2 hover:border-violet-500 hover:bg-violet-50">
                   <Icon size={26} className="text-slate-700" /><span className="text-xs text-center">{label}</span>
                 </button>
@@ -548,7 +511,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
                   {open.map((inv) => (
                     <button key={inv.id} onClick={() => scanInvite(inv)} className="flex items-center gap-3 border border-slate-300 rounded-lg px-3 py-2 hover:border-violet-500 hover:bg-violet-50 text-left">
                       <Ticket size={18} className="text-emerald-700 shrink-0" />
-                      <span className="text-sm">{inv.name}{inv.preup && <span className="ml-1.5 text-[10px] bg-emerald-100 text-emerald-800 rounded-full px-1.5 py-0.5 align-middle">ID pre-uploaded</span>}<span className="block text-xs text-slate-500" style={mono}>{inv.ref}</span></span>
+                      <span className="text-sm">{inv.name}<span className="block text-xs text-slate-500" style={mono}>{inv.ref}</span></span>
                     </button>
                   ))}
                   {open.length === 0 && <p className="text-sm text-slate-400 col-span-2">No unused invites — create one in the Host app tab.</p>}
@@ -556,31 +519,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
               </>
             )}
             <button onClick={reset} className="mt-4 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100 flex items-center gap-1"><ArrowLeft size={14} /> Back</button>
-          </>
-        )}
-
-        {step === "otp" && (
-          <>
-            <h2 className="text-xl font-semibold text-slate-800 mb-1">Check in with your phone number</h2>
-            <p className="text-sm text-slate-500 mb-4">We match your number to a pre-registration and send a one-time code.</p>
-            <div className="max-w-xs mx-auto space-y-3">
-              <label className="text-xs text-slate-500 block">Mobile number
-                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98xxx xxx21" disabled={otpPhase > 0} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
-              </label>
-              {otpPhase === 0 ? (
-                <button onClick={() => { if (phone.trim()) { setOtpPhase(1); setErr(""); } }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Send OTP on WhatsApp / SMS</button>
-              ) : (
-                <>
-                  <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={13} /> Code sent. <span className="text-slate-400">(Demo: the code is 4821)</span></p>
-                  <label className="text-xs text-slate-500 block">One-time code
-                    <input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="4-digit code" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
-                  </label>
-                  <button onClick={() => { if (otp.trim() === "4821") { setErr(""); setF({ name: "Priya Sharma", company: "Northwind Ltd", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); } else setErr("That code does not match — try 4821 (demo)"); }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Verify code</button>
-                </>
-              )}
-              {err && <p className="text-xs text-rose-600">{err}</p>}
-            </div>
-            <button onClick={reset} className="mt-5 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100 flex items-center gap-1"><ArrowLeft size={14} /> Cancel</button>
           </>
         )}
 
@@ -653,10 +591,8 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
             <p className="text-sm text-slate-500 mb-4">
               Method: {method}
               {f.inviteId && " — invite found, details pulled from your pre-registration"}
-              {f.inviteId && f.preup && " · ID + selfie pre-uploaded, identity pre-verified"}
               {method === "Face check-in" && " — returning visitor recognized, details pre-filled"}
               {method === "Scan ID document" && " — name read from your document, add the rest"}
-              {method === "Phone / OTP" && " — number matched to a pre-registered visitor"}
             </p>
             <div className="grid sm:grid-cols-2 gap-3 mb-3">
               <label className="text-xs text-slate-500">Full name
@@ -697,13 +633,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
             <label className="flex items-start gap-2 text-sm mb-4">
               <input type="checkbox" checked={dpdp} onChange={(e) => setDpdp(e.target.checked)} className="mt-0.5" /> <span>I consent to my personal data being processed for this visit and deleted after the retention period <span className="text-xs text-slate-400">(DPDP Act 2023)</span></span>
             </label>
-            {f.purpose === "Contractor work" && (
-              <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 mb-4">
-                <p className="text-xs font-medium text-amber-800 mb-2">Contractor safety questionnaire (site policy)</p>
-                <label className="flex items-center gap-2 text-sm mb-2"><input type="checkbox" checked={hq1} onChange={(e) => setHq1(e.target.checked)} /> I have watched the safety induction video</label>
-                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={hq2} onChange={(e) => setHq2(e.target.checked)} /> I am carrying required PPE (helmet, vest)</label>
-              </div>
-            )}
             {err && <p className="text-xs text-rose-600 mb-2">{err}</p>}
             <div className="flex justify-between">
               <button onClick={() => setStep("details")} className="flex items-center gap-1 text-sm border border-slate-300 rounded-lg px-3 py-2 hover:bg-slate-100"><ArrowLeft size={14} /> Back</button>
@@ -746,12 +675,11 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
           <div className="text-center py-8">
             <div className="mx-auto w-14 h-14 rounded-full border-2 border-violet-500 scanframe flex items-center justify-center mb-4"><Bell size={24} className="text-emerald-700" /></div>
             <h2 className="text-xl font-semibold text-slate-800 mb-1">Waiting for {pending.host.split(" —")[0]} to approve</h2>
-            <p className="text-sm text-slate-500 mb-1">Your host has been notified on WhatsApp.</p>
+            <p className="text-sm text-slate-500 mb-1">Your host has been notified on their phone.</p>
             <p className="text-xs text-slate-400 mb-5">Demo: switch to the Host app tab, tap Confirm (or Deny), then come back here — this screen updates live.</p>
             <div className="inline-flex items-center gap-2 text-xs bg-slate-100 rounded-full px-3 py-1.5 text-slate-600">
               <span className="w-2 h-2 rounded-full bg-amber-500 livedot" /> Status: awaiting approval
             </div>
-            {escalated && <p className="text-xs text-amber-700 mt-3 flex items-center justify-center gap-1"><AlertTriangle size={13} /> No response yet — escalated to the team channel (Slack / Teams) per SLA.</p>}
             <button onClick={reset} className="block mx-auto mt-6 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100">Cancel check-in</button>
           </div>
         )}
@@ -802,11 +730,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
               </div>
               <div className="min-w-36 bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col items-center justify-center gap-2">
                 <QrCode size={64} /><span className="text-xs text-slate-400">Tap at turnstile</span>
-                {walletAdded ? (
-                  <span className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={12} /> In Google Wallet</span>
-                ) : (
-                  <button onClick={() => setWalletAdded(true)} className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 hover:bg-slate-100 flex items-center gap-1"><Wallet size={12} /> Add to Google Wallet</button>
-                )}
               </div>
             </div>
             <p className="text-sm text-slate-500 mt-4 flex items-center gap-2"><Bell size={15} /> {issued.host.split(" —")[0]} has been notified — check the Host app tab.</p>
@@ -981,11 +904,10 @@ function ZoneMap({ onSite, isOver }) {
   );
 }
 
-function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, setEvac, addAlert, ping, securityRelease }) {
+function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, setEvac, addAlert, ping }) {
   const out = visitors.filter((v) => v.status === "checked-out").length;
   const active = alerts.filter((a) => !a.reviewed);
   const overs = onSite.filter(isOver);
-  const held = visitors.filter((v) => v.status === "held");
   const review = (id) => setAlerts((s) => s.map((a) => (a.id === id ? { ...a, reviewed: true } : a)));
   const simulate = () => addAlert({ sev: "danger", title: "Badge and face mismatch — gate A1", detail: "Camera AI: badge V-20455 presented by an unenrolled face. Entry blocked pending review." });
   const minsOn = (v) => Math.max(0, Math.floor((Date.now() - v.checkinAt) / 60000));
@@ -1051,32 +973,11 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
         <p className="text-xs text-slate-400 mt-2">Green bar = current hour (live count). Peak so far: 11 am. Predicted evening peak: 4–5 pm (AI forecast, demo data).</p>
       </Card>
 
-      {held.length > 0 && (
-        <Card className="border-rose-300">
-          <h2 className="text-sm font-semibold text-rose-700 mb-1 flex items-center gap-2"><ShieldAlert size={16} /> Security review queue</h2>
-          <p className="text-xs text-slate-500 mb-3">Watchlist matches held at the kiosk. Human decision required before entry or denial — no automated action.</p>
-          <div className="space-y-2">
-            {held.map((v) => (
-              <div key={v.id} className="flex items-center gap-3 bg-rose-50 rounded-lg px-3 py-2.5 flex-wrap">
-                <Avatar name={v.name} tone="bg-rose-100 text-rose-800" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{v.name}</p>
-                  <p className="text-xs text-slate-500 truncate">{v.method} · host {v.host.split(" —")[0]} · {v.purpose.toLowerCase()}</p>
-                </div>
-                <button onClick={() => securityRelease(v, true)} className="text-xs bg-emerald-500 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-600 flex items-center gap-1"><UserCheck size={12} /> Approve</button>
-                <button onClick={() => securityRelease(v, false)} className="text-xs border border-rose-300 text-rose-700 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1"><UserX size={12} /> Reject</button>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
       <Card>
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2"><Camera size={16} /> AI camera alerts</h2>
           <div className="flex gap-2 flex-wrap">
             <button onClick={simulate} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate camera event</button>
-            <button onClick={() => addAlert({ sev: "warning", title: "ANPR — vehicle admitted, gate P1", detail: "Plate KA-01-MJ-4821 matched expected visitor Arjun Patel; barrier opened, linked to visit record." })} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate ANPR entry</button>
             <button onClick={() => setEvac(true)} className="text-xs bg-rose-600 text-white rounded-lg px-3 py-1.5 hover:bg-rose-500 flex items-center gap-1"><Siren size={13} /> Start evacuation</button>
           </div>
         </div>
@@ -1127,7 +1028,7 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
 
 /* ================= Host app ================= */
 function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, markCollected }) {
-  const [inv, setInv] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
+  const [inv, setInv] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0] });
   const [made, setMade] = useState(null);
   const arrivals = pending.filter((v) => v.status === "checked-in");
   const approvals = pending.filter((v) => v.status === "awaiting-approval");
@@ -1137,7 +1038,7 @@ function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, 
     if (!inv.name.trim()) return;
     createInvite(inv);
     setMade(inv.name);
-    setInv({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
+    setInv({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0] });
     setTimeout(() => setMade(null), 4000);
   };
   return (
@@ -1152,7 +1053,6 @@ function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, 
             <select value={inv.host} onChange={(e) => setInv({ ...inv, host: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{HOSTS.map((h) => <option key={h}>{h}</option>)}</select>
             <select value={inv.purpose} onChange={(e) => setInv({ ...inv, purpose: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{PURPOSES.map((p) => <option key={p}>{p}</option>)}</select>
           </div>
-          <label className="flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" checked={inv.preup} onChange={(e) => setInv({ ...inv, preup: e.target.checked })} /> Ask visitor to pre-upload ID + selfie for faster arrival</label>
           <button onClick={make} className="w-full bg-violet-500 text-white text-sm rounded-lg py-2.5 hover:bg-violet-600">Send invite with QR pass</button>
           {made && <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> Invite sent to {made} — now try it at the Kiosk.</p>}
         </div>
@@ -1169,7 +1069,7 @@ function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, 
       </Card>
 
       <div className="space-y-3">
-        <p className="text-xs text-slate-500">Arrivals, approvals, and deliveries land here as WhatsApp and push notifications.</p>
+        <p className="text-xs text-slate-500">Arrivals, approvals, and deliveries land here as push notifications.</p>
         {pending.length === 0 && deliveries.filter((dv) => !dv.collected).length === 0 && <Card className="text-center text-sm text-slate-400">No pending notifications. Check someone in at the kiosk or send a slip request from reception.</Card>}
 
         {deliveries.filter((dv) => !dv.collected).map((dv) => (
@@ -1258,7 +1158,6 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
     ["auditlog", "Audit log & reports", FileText],
     ["users", "Users & roles", Users],
     ["retention", "Data retention", Clock],
-    ["integrations", "Integrations", Globe],
   ];
   return (
     <div className="space-y-4">
@@ -1274,47 +1173,7 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
       {sub === "auditlog" && <AdminAudit audit={audit} visitors={visitors} ping={ping} logAudit={logAudit} />}
       {sub === "users" && <AdminUsers logAudit={logAudit} ping={ping} />}
       {sub === "retention" && <AdminRetention visitors={visitors} logAudit={logAudit} ping={ping} />}
-      {sub === "integrations" && <AdminIntegrations logAudit={logAudit} ping={ping} />}
     </div>
-  );
-}
-
-/* --- Integrations --- */
-function AdminIntegrations({ logAudit, ping }) {
-  const [conns, setConns] = useState([
-    { name: "WhatsApp Business", cat: "Invites, OTP & host confirmations", on: true },
-    { name: "Slack / MS Teams", cat: "Host notifications & escalation", on: true },
-    { name: "Twilio SMS", cat: "OTP & fallback alerts", on: true },
-    { name: "Outlook 365 / Google Calendar", cat: "Create invites from meetings", on: true },
-    { name: "Azure AD / Okta (SCIM)", cat: "SSO & user provisioning", on: true },
-    { name: "Lenel OnGuard (edge connector)", cat: "Access control provisioning", on: true },
-    { name: "HID / Honeywell / Brivo / Kisi", cat: "Access control (additional panels)", on: false },
-    { name: "Verkada / Milestone", cat: "CCTV video linkage", on: false },
-    { name: "Zebra ZD printers (LAN)", cat: "Badge printing", on: true },
-  ]);
-  const toggle = (i) => {
-    const c = conns[i];
-    setConns((s) => s.map((x, j) => (j === i ? { ...x, on: !x.on } : x)));
-    logAudit("Admin", `Integration ${c.on ? "disconnected" : "connected"}`, c.name);
-    ping(`${c.name} ${c.on ? "disconnected" : "connected"}`);
-  };
-  return (
-    <Card>
-      <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Globe size={18} /> Integrations</h2>
-      <p className="text-xs text-slate-500 mb-4">Integration-first architecture — site hardware connects through the on-premises edge connector (outbound-only TLS, no inbound ports).</p>
-      <div className="grid sm:grid-cols-2 gap-3">
-        {conns.map((c, i) => (
-          <div key={c.name} className="border border-slate-200 rounded-xl p-3 flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{c.name}</p>
-              <p className="text-xs text-slate-500 truncate">{c.cat}</p>
-            </div>
-            <Pill tone={c.on ? "green" : "gray"}>{c.on ? "Connected" : "Off"}</Pill>
-            <button onClick={() => toggle(i)} className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 hover:bg-slate-100">{c.on ? "Disconnect" : "Connect"}</button>
-          </div>
-        ))}
-      </div>
-    </Card>
   );
 }
 
@@ -1484,16 +1343,8 @@ function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
   return (
     <div className="grid lg:grid-cols-2 gap-4">
       <Card>
-        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Eye size={18} /> Watchlist (blocklist)</h2>
-        <p className="text-xs text-slate-500 mb-3">People on this list never get a badge automatically — the kiosk holds them for a human security decision.</p>
-        <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-4 text-xs text-slate-600 space-y-1">
-          <p className="font-medium text-violet-800">Try it — how the flow works:</p>
-          <p><span className="font-medium">1.</span> Add a name below (or use "Victor Crane", already listed).</p>
-          <p><span className="font-medium">2.</span> Go to the <span className="font-medium">Kiosk</span> tab → "Walk-in visitor" → enter that exact name.</p>
-          <p><span className="font-medium">3.</span> The kiosk holds them ("see reception") — no badge is issued.</p>
-          <p><span className="font-medium">4.</span> Open the <span className="font-medium">Security</span> tab → red "Security review queue" → Approve or Reject.</p>
-          <p><span className="font-medium">5.</span> Check <span className="font-medium">Audit log</span> — every step was recorded.</p>
-        </div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Eye size={18} /> Watchlist</h2>
+        <p className="text-xs text-slate-500 mb-4">Names here are held at the kiosk for security review. Add one, then check in with it on the Kiosk tab.</p>
         <div className="flex gap-2 mb-4">
           <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Full name" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
           <button onClick={add} className="text-sm bg-violet-500 text-white rounded-lg px-4 hover:bg-violet-600">Add</button>
@@ -1519,26 +1370,6 @@ function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
           ))}
         </div>
         <p className="text-xs text-slate-400 mt-4">Badges auto-expire at the end of the visit window or on checkout. Camera AI (tailgating, badge-face match) is enabled — see the simulate button in Security.</p>
-      </Card>
-      <Card className="lg:col-span-2">
-        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><FileText size={18} /> Contractor compliance documents</h2>
-        <p className="text-xs text-slate-500 mb-3">Certificates tracked per contractor — badge issuance is blocked when a required document has expired.</p>
-        <div className="divide-y divide-slate-100">
-          {[
-            ["Joseph D'Souza — FixIt Services", "Safety induction", "valid till Sep 2026", "green", "Valid"],
-            ["FixIt Services", "Insurance certificate", "expires in 12 days", "amber", "Expiring"],
-            ["Ravi Verma — ElectroFix", "Permit to work", "expired 30 Jun 2026", "red", "Blocked"],
-          ].map(([who, doc, exp, tone, label]) => (
-            <div key={who + doc} className="flex items-center gap-3 py-2.5">
-              <FileText size={16} className="text-slate-400 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm truncate">{doc} <span className="text-slate-400">· {who}</span></p>
-                <p className="text-xs text-slate-500">{exp}</p>
-              </div>
-              <Pill tone={tone}>{label}</Pill>
-            </div>
-          ))}
-        </div>
       </Card>
     </div>
   );
