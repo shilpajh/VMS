@@ -59,15 +59,18 @@ export default function App() {
   const addAlert = (a) => setAlerts((s) => [{ id: Date.now(), at: Date.now(), reviewed: false, ...a }, ...s]);
   const update = (id, patch) => setVisitors((s) => s.map((v) => (v.id === id ? { ...v, ...patch } : v)));
 
+  const BLOCKED_CONTRACTORS = ["Ravi Verma"];
   const checkIn = ({ name, company, host, purpose, method, inviteId, requireApproval }) => {
     const flagged = watchlist.some((w) => w.toLowerCase() === name.toLowerCase());
+    const docBlocked = purpose === "Contractor work" && BLOCKED_CONTRACTORS.some((w) => w.toLowerCase() === name.toLowerCase());
     const needsOk = requireApproval && !flagged;
-    const badge = needsOk ? "—" : `V-${badgeSeq}`;
-    if (!needsOk) setBadgeSeq((n) => n + 1);
-    const v = { id: Date.now(), name, company: company || "—", host, purpose, method, badge, zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: flagged ? "held" : needsOk ? "awaiting-approval" : "checked-in", flagged, hostResponse: null };
+    const badge = needsOk || docBlocked ? "—" : `V-${badgeSeq}`;
+    if (!needsOk && !docBlocked) setBadgeSeq((n) => n + 1);
+    const v = { id: Date.now(), name, company: company || "—", host, purpose, method, badge, zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: docBlocked ? "held" : flagged ? "held" : needsOk ? "awaiting-approval" : "checked-in", flagged, docBlocked, hostResponse: null };
     setVisitors((s) => [v, ...s]);
     if (inviteId) setInvites((s) => s.map((i) => (i.id === inviteId ? { ...i, used: true } : i)));
-    if (flagged) { addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." }); logAudit("Kiosk", "Watchlist hit", `${name} · check-in held for security review`); }
+    if (docBlocked) { addAlert({ sev: "warning", title: `Compliance hold — ${name}`, detail: "Contractor permit-to-work has expired. Badge blocked until document renewed." }); logAudit("Kiosk", "Compliance hold", `${name} · expired permit-to-work · badge blocked`); }
+    else if (flagged) { addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." }); logAudit("Kiosk", "Watchlist hit", `${name} · check-in held for security review`); }
     else if (needsOk) { ping(`Approval request sent to ${host.split(" —")[0]} — walk-in visitor ${name}`); logAudit("Kiosk", "Approval requested", `${name} · walk-in · host ${host.split(" —")[0]}`); }
     else { ping(`${host.split(" —")[0]} notified on WhatsApp: ${name} has arrived`); logAudit("Kiosk", "Check-in", `${name} · ${method} · badge ${badge}`); }
     return v;
@@ -355,7 +358,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [otpPhase, setOtpPhase] = useState(0);
-  const [escalated, setEscalated] = useState(false);
+  const [escalated, setEscalated] = useState(0);
   const [walletAdded, setWalletAdded] = useState(false);
   const [offline, setOffline] = useState(false);
   const [hq1, setHq1] = useState(false);
@@ -383,12 +386,13 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   }, [step, pending, pendingStatus]);
 
   useEffect(() => {
-    if (step !== "waiting") { setEscalated(false); return; }
-    const t = setTimeout(() => setEscalated(true), 15000);
-    return () => clearTimeout(t);
+    if (step !== "waiting") { setEscalated(0); return; }
+    const t1 = setTimeout(() => setEscalated(1), 8000);
+    const t2 = setTimeout(() => setEscalated(2), 16000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [step]);
 
-  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); setPhone(""); setOtp(""); setOtpPhase(0); setEscalated(false); setWalletAdded(false); setHq1(false); setHq2(false); };
+  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); setPhone(""); setOtp(""); setOtpPhase(0); setEscalated(0); setWalletAdded(false); setHq1(false); setHq2(false); };
 
   const takePhoto = () => {
     setCount(3);
@@ -751,7 +755,8 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
             <div className="inline-flex items-center gap-2 text-xs bg-slate-100 rounded-full px-3 py-1.5 text-slate-600">
               <span className="w-2 h-2 rounded-full bg-amber-500 livedot" /> Status: awaiting approval
             </div>
-            {escalated && <p className="text-xs text-amber-700 mt-3 flex items-center justify-center gap-1"><AlertTriangle size={13} /> No response yet — escalated to the team channel (Slack / Teams) per SLA.</p>}
+            {escalated === 1 && <p className="text-xs text-amber-700 mt-3 flex items-center justify-center gap-1"><AlertTriangle size={13} /> No response after 2 min — escalated to the team channel (Slack / Teams).</p>}
+            {escalated === 2 && <p className="text-xs text-rose-700 mt-1 flex items-center justify-center gap-1"><AlertTriangle size={13} /> Still no response after 5 min — escalated to floor admin.</p>}
             <button onClick={reset} className="block mx-auto mt-6 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100">Cancel check-in</button>
           </div>
         )}
@@ -780,9 +785,9 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
           <div className="text-center py-8">
             <ShieldAlert size={40} className="mx-auto text-rose-600 mb-3" />
             <h2 className="text-xl font-semibold text-slate-800 mb-1">Please see the reception desk</h2>
-            <p className="text-sm text-slate-500 mb-5">Your check-in needs a quick manual review before a badge can be issued.</p>
+            <p className="text-sm text-slate-500 mb-5">{issued.docBlocked ? "Your permit-to-work has expired — a badge cannot be issued until it's renewed." : "Your check-in needs a quick manual review before a badge can be issued."}</p>
             <button onClick={reset} className="text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100">Back to start</button>
-            <p className="text-xs text-slate-400 mt-4">(Demo: this name is on the watchlist — see the Security and Admin tabs.)</p>
+            <p className="text-xs text-slate-400 mt-4">{issued.docBlocked ? "(Demo: try \"Ravi Verma\" as a Contractor — see Admin → Watchlist & zones → Contractor compliance.)" : "(Demo: this name is on the watchlist — see the Security and Admin tabs.)"}</p>
           </div>
         ) : (
           <>
@@ -986,7 +991,7 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
   const active = alerts.filter((a) => !a.reviewed);
   const overs = onSite.filter(isOver);
   const held = visitors.filter((v) => v.status === "held");
-  const review = (id) => setAlerts((s) => s.map((a) => (a.id === id ? { ...a, reviewed: true } : a)));
+  const review = (id, disposition) => { setAlerts((s) => s.map((a) => (a.id === id ? { ...a, reviewed: true, disposition } : a))); };
   const simulate = () => addAlert({ sev: "danger", title: "Badge and face mismatch — gate A1", detail: "Camera AI: badge V-20455 presented by an unenrolled face. Entry blocked pending review." });
   const minsOn = (v) => Math.max(0, Math.floor((Date.now() - v.checkinAt) / 60000));
   const safe = onSite.filter((v) => v.status === "safe").length;
@@ -997,7 +1002,16 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
       <Card className="border-rose-300">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
           <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2 text-rose-700"><Siren size={18} /> Evacuation muster</h2>
-          <button onClick={() => setEvac(false)} className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">End evacuation</button>
+          <div className="flex gap-2">
+            <button onClick={() => {
+              const missing = onSite.filter((v) => v.status !== "safe");
+              const csv = ["Name,Zone,Badge", ...missing.map((v) => `"${v.name}","${ZONE_LABEL[v.zoneKey]}","${v.badge}"`)].join("\n");
+              const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+              const a = document.createElement("a"); a.href = url; a.download = "missing-persons.csv"; a.click();
+              URL.revokeObjectURL(url);
+            }} className="text-sm border border-rose-300 text-rose-700 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1"><Send size={13} /> Share missing list</button>
+            <button onClick={() => setEvac(false)} className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">End evacuation</button>
+          </div>
         </div>
         <p className="text-xs text-slate-500 mb-3">Mark each person safe as they reach the assembly point.</p>
         <div className="mb-4">
@@ -1049,6 +1063,7 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
           ))}
         </div>
         <p className="text-xs text-slate-400 mt-2">Green bar = current hour (live count). Peak so far: 11 am. Predicted evening peak: 4–5 pm (AI forecast, demo data).</p>
+        <div className="mt-3 flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2"><Users size={13} /> Queue analytics: 2 people waiting at counter 1, avg wait 3 min — within threshold, no extra counter needed.</div>
       </Card>
 
       {held.length > 0 && (
@@ -1060,10 +1075,10 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
               <div key={v.id} className="flex items-center gap-3 bg-rose-50 rounded-lg px-3 py-2.5 flex-wrap">
                 <Avatar name={v.name} tone="bg-rose-100 text-rose-800" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{v.name}</p>
-                  <p className="text-xs text-slate-500 truncate">{v.method} · host {v.host.split(" —")[0]} · {v.purpose.toLowerCase()}</p>
+                  <p className="text-sm font-medium">{v.name} {v.docBlocked && <Pill tone="amber">Compliance hold</Pill>}</p>
+                  <p className="text-xs text-slate-500 truncate">{v.docBlocked ? "Expired permit-to-work" : v.method} · host {v.host.split(" —")[0]} · {v.purpose.toLowerCase()}</p>
                 </div>
-                <button onClick={() => securityRelease(v, true)} className="text-xs bg-emerald-500 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-600 flex items-center gap-1"><UserCheck size={12} /> Approve</button>
+                <button onClick={() => securityRelease(v, true)} className="text-xs bg-emerald-500 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-600 flex items-center gap-1"><UserCheck size={12} /> {v.docBlocked ? "Override & issue" : "Approve"}</button>
                 <button onClick={() => securityRelease(v, false)} className="text-xs border border-rose-300 text-rose-700 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1"><UserX size={12} /> Reject</button>
               </div>
             ))}
@@ -1077,6 +1092,8 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
           <div className="flex gap-2 flex-wrap">
             <button onClick={simulate} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate camera event</button>
             <button onClick={() => addAlert({ sev: "warning", title: "ANPR — vehicle admitted, gate P1", detail: "Plate KA-01-MJ-4821 matched expected visitor Arjun Patel; barrier opened, linked to visit record." })} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate ANPR entry</button>
+            <button onClick={() => addAlert({ sev: "warning", title: "PPE missing — basement entry", detail: "Camera AI: visitor entering contractor zone without helmet/vest detected. Entry paused pending review." })} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate PPE alert</button>
+            <button onClick={() => addAlert({ sev: "warning", title: "Loitering detected — Floor 3 corridor", detail: "Visitor badge V-20455 stationary outside credential zone for 6 min. Cross-referenced with badge data." })} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-100">Simulate loitering</button>
             <button onClick={() => setEvac(true)} className="text-xs bg-rose-600 text-white rounded-lg px-3 py-1.5 hover:bg-rose-500 flex items-center gap-1"><Siren size={13} /> Start evacuation</button>
           </div>
         </div>
@@ -1098,7 +1115,10 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
                 <p className="text-sm font-medium text-rose-800">{a.title}</p>
                 <p className="text-xs text-rose-700">{a.detail} · {fmt(a.at)}</p>
               </div>
-              <button onClick={() => review(a.id)} className="text-xs border border-slate-300 bg-white rounded-lg px-3 py-1.5 hover:bg-slate-100">Review</button>
+              <div className="flex gap-1.5 shrink-0">
+                <button onClick={() => review(a.id, "confirmed")} className="text-xs bg-rose-600 text-white rounded-lg px-2.5 py-1.5 hover:bg-rose-500">Confirmed</button>
+                <button onClick={() => review(a.id, "false-positive")} className="text-xs border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 hover:bg-slate-100">False positive</button>
+              </div>
             </div>
           ))}
         </div>
@@ -1115,6 +1135,11 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
                 <p className="text-xs text-slate-500 truncate">{ZONE_LABEL[v.zoneKey]} · badge <span style={mono}>{v.badge}</span> · {minsOn(v)} min on site · {v.hostResponse ? `host: ${v.hostResponse.toLowerCase()}` : "host not yet responded"}</p>
               </div>
               <StatusPill v={v} isOver={isOver} />
+              <button onClick={() => {
+                const newBadge = `V-${20500 + Math.floor(Math.random() * 400)}`;
+                update(v.id, { badge: newBadge });
+                ping(`${v.name}: lost badge deactivated instantly — reissued as ${newBadge}`);
+              }} className="text-xs border border-amber-300 text-amber-700 rounded-lg px-2.5 py-1.5 hover:bg-amber-50 flex items-center gap-1"><CreditCard size={12} /> Lost card</button>
               <button onClick={() => { update(v.id, { status: "checked-out" }); ping(`${v.name} checked out — badge ${v.badge} deactivated`); }} className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 hover:bg-slate-100 flex items-center gap-1"><LogOut size={12} /> Out</button>
             </div>
           ))}
@@ -1259,6 +1284,8 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
     ["users", "Users & roles", Users],
     ["retention", "Data retention", Clock],
     ["integrations", "Integrations", Globe],
+    ["types", "Visitor types", Users],
+    ["reports", "Reports", BarChart3],
   ];
   return (
     <div className="space-y-4">
@@ -1275,6 +1302,104 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
       {sub === "users" && <AdminUsers logAudit={logAudit} ping={ping} />}
       {sub === "retention" && <AdminRetention visitors={visitors} logAudit={logAudit} ping={ping} />}
       {sub === "integrations" && <AdminIntegrations logAudit={logAudit} ping={ping} />}
+      {sub === "types" && <AdminVisitorTypes logAudit={logAudit} ping={ping} />}
+      {sub === "reports" && <AdminReports visitors={visitors} ping={ping} logAudit={logAudit} />}
+    </div>
+  );
+}
+
+/* --- Visitor types & flows --- */
+function AdminVisitorTypes({ logAudit, ping }) {
+  const [types, setTypes] = useState([
+    { name: "Guest", nda: true, photo: true, escort: false, ppe: false, approval: "Host" },
+    { name: "Contractor", nda: true, photo: true, escort: true, ppe: true, approval: "Host + Security" },
+    { name: "Vendor", nda: true, photo: true, escort: false, ppe: false, approval: "Host" },
+    { name: "Interview", nda: false, photo: true, escort: false, ppe: false, approval: "Host" },
+    { name: "Delivery", nda: false, photo: false, escort: false, ppe: false, approval: "Reception" },
+  ]);
+  const FLAGS = [["nda", "NDA required"], ["photo", "Photo required"], ["escort", "Escort required"], ["ppe", "PPE check"]];
+  const toggle = (i, key) => {
+    setTypes((s) => s.map((t, j) => (j === i ? { ...t, [key]: !t[key] } : t)));
+    logAudit("Admin", "Visitor type flow changed", `${types[i].name} · ${key} ${types[i][key] ? "disabled" : "enabled"}`);
+    ping(`${types[i].name} flow updated`);
+  };
+  return (
+    <Card>
+      <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Users size={18} /> Visitor types & flows</h2>
+      <p className="text-xs text-slate-500 mb-4">Each visitor type gets its own configurable check-in flow — toggle what's required before a badge is issued.</p>
+      <div className="space-y-3">
+        {types.map((t, i) => (
+          <div key={t.name} className="border border-slate-200 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <p className="text-sm font-medium">{t.name}</p>
+              <Pill tone="purple">Approval: {t.approval}</Pill>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {FLAGS.map(([key, label]) => (
+                <button key={key} onClick={() => toggle(i, key)}
+                  className={`text-xs rounded-full px-2.5 py-1 border transition-colors ${t[key] ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
+                  {t[key] ? "✓ " : ""}{label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* --- Reports & scheduled delivery --- */
+function AdminReports({ visitors, ping, logAudit }) {
+  const [schedule, setSchedule] = useState("Weekly");
+  const [apiOn, setApiOn] = useState(true);
+  const checkedIn = visitors.filter((v) => v.checkinAt).length;
+  const avgMins = 34; // demo constant vs PRD targets < 30s/90s pre-vs-walkin at kiosk step-level; this is portal-level avg incl. approvals
+  const noShows = 4;
+  const peak = "11:00 AM";
+  const metrics = [
+    ["Avg check-in time (all methods)", `${avgMins}s`, "< 30s target (pre-reg)"],
+    ["No-shows today", noShows, "vs 17 expected"],
+    ["Peak hour", peak, "12 on-site"],
+    ["Watchlist screening coverage", "100%", "target: 100%"],
+  ];
+  const genReport = (name) => { logAudit("Admin", "Report generated", name); ping(`${name} generated — see download`); };
+  return (
+    <div className="space-y-4">
+      <Card>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><BarChart3 size={18} /> Reports & analytics</h2>
+        <p className="text-xs text-slate-500 mb-4">Daily visitor logs, host activity, and PRD success metrics at a glance.</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          {metrics.map(([label, val, sub]) => (
+            <div key={label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <p className="text-xs text-slate-500 mb-1">{label}</p>
+              <p className="text-lg font-medium" style={mono}>{val}</p>
+              <p className="text-xs text-slate-400">{sub}</p>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {["Daily visitor log", "Host activity report", "No-show report", "Compliance export (PDF)"].map((r) => (
+            <button key={r} onClick={() => genReport(r)} className="text-xs border border-slate-300 rounded-lg px-3 py-2 hover:bg-slate-100 flex items-center gap-1"><FileText size={12} /> {r}</button>
+          ))}
+        </div>
+      </Card>
+      <Card>
+        <h2 className="text-sm font-semibold text-slate-800 mb-3">Scheduled delivery & API access</h2>
+        <div className="flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2.5 mb-3 flex-wrap gap-2">
+          <span className="text-sm">Email compliance report</span>
+          <select value={schedule} onChange={(e) => { setSchedule(e.target.value); logAudit("Admin", "Report schedule changed", e.target.value); }} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white">
+            {["Off", "Daily", "Weekly", "Monthly"].map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center justify-between border border-slate-200 rounded-lg px-3 py-2.5">
+          <div>
+            <p className="text-sm">Analytics API access</p>
+            <p className="text-xs text-slate-500" style={mono}>GET /v1/analytics/visits · REST + webhooks</p>
+          </div>
+          <button onClick={() => { setApiOn(!apiOn); logAudit("Admin", `API access ${apiOn ? "revoked" : "enabled"}`, "Analytics API key"); }} className={`text-xs rounded-lg px-3 py-1.5 border ${apiOn ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-300"}`}>{apiOn ? "Enabled" : "Disabled"}</button>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -1493,6 +1618,7 @@ function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
           <p><span className="font-medium">3.</span> The kiosk holds them ("see reception") — no badge is issued.</p>
           <p><span className="font-medium">4.</span> Open the <span className="font-medium">Security</span> tab → red "Security review queue" → Approve or Reject.</p>
           <p><span className="font-medium">5.</span> Check <span className="font-medium">Audit log</span> — every step was recorded.</p>
+          <p className="pt-1 border-t border-violet-200 mt-1"><span className="font-medium">Also try:</span> walk-in as "Ravi Verma" with purpose "Contractor work" — his permit-to-work has expired (see Contractor compliance below), so the kiosk blocks the badge the same way, for a different reason.</p>
         </div>
         <div className="flex gap-2 mb-4">
           <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Full name" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
