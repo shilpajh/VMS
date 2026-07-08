@@ -1363,7 +1363,45 @@ function AdminReports({ visitors, ping, logAudit }) {
     ["Peak hour", peak, "12 on-site"],
     ["Watchlist screening coverage", "100%", "target: 100%"],
   ];
-  const genReport = (name) => { logAudit("Admin", "Report generated", name); ping(`${name} generated — see download`); };
+  const download = (filename, content) => {
+    const url = URL.createObjectURL(new Blob([content], { type: "text/csv" }));
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const genReport = (name) => {
+    let csv = "";
+    if (name === "Daily visitor log") {
+      csv = ["Name,Company,Host,Purpose,Method,Badge,Zone,Check-in,Status",
+        ...visitors.map((v) => `"${v.name}","${v.company}","${v.host.split(" —")[0]}","${v.purpose}","${v.method}","${v.badge}","${ZONE_LABEL[v.zoneKey] || ""}","${fmt(v.checkinAt)}","${v.status}"`)
+      ].join("\n");
+      download("daily-visitor-log.csv", csv);
+    } else if (name === "Host activity report") {
+      const byHost = {};
+      visitors.forEach((v) => { const h = v.host.split(" —")[0]; byHost[h] = (byHost[h] || 0) + 1; });
+      csv = ["Host,Visitors hosted,Last response", ...Object.entries(byHost).map(([h, n]) => {
+        const last = visitors.find((v) => v.host.startsWith(h) && v.hostResponse);
+        return `"${h}",${n},"${last ? last.hostResponse : "—"}"`;
+      })].join("\n");
+      download("host-activity-report.csv", csv);
+    } else if (name === "No-show report") {
+      csv = ["Visitor,Host,Expected purpose,Status",
+        `"Kunal Sethi","Rahul Mehta","Business meeting","No-show — invite expired unused"`,
+        `"Fatima Al-Rashid","Sara Khan","Interview","No-show — invite expired unused"`,
+        `"Tom Becker","David Lee","Vendor visit","No-show — invite expired unused"`,
+        `"Meena Iyer","Anita Rao","Contractor work","No-show — invite expired unused"`,
+      ].join("\n");
+      download("no-show-report.csv", csv);
+    } else {
+      csv = ["Metric,Value,Target", ...metrics.map(([label, val, sub]) => `"${label}","${val}","${sub}"`),
+        "", "Visitor,Status,Screening,Audit trail",
+        ...visitors.map((v) => `"${v.name}","${v.status}","Screened","Logged"`)
+      ].join("\n");
+      download("compliance-export.csv", csv);
+    }
+    logAudit("Admin", "Report generated", `${name} · ${visitors.length} records exported`);
+    ping(`${name} downloaded`);
+  };
   return (
     <div className="space-y-4">
       <Card>
