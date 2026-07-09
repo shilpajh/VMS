@@ -43,8 +43,6 @@ export default function App() {
   const [watchlist, setWatchlist] = useState(["Victor Crane"]);
   const [evac, setEvac] = useState(false);
   const [badgeSeq, setBadgeSeq] = useState(20461);
-  const [siteMode, setSiteMode] = useState("manual"); // "manual" | "secure"
-  const [siteName, setSiteName] = useState("Corporate HQ");
   const [audit, setAudit] = useState([
     { id: 1, at: mins(165), actor: "Kiosk", action: "Check-in", detail: "Joseph D'Souza · ID scan · badge V-20388" },
     { id: 2, at: mins(64), actor: "Kiosk", action: "Check-in", detail: "Anita Kapoor · QR invite · badge V-20455 · VIP" },
@@ -66,15 +64,13 @@ export default function App() {
     const flagged = watchlist.some((w) => w.toLowerCase() === name.toLowerCase());
     const docBlocked = purpose === "Contractor work" && BLOCKED_CONTRACTORS.some((w) => w.toLowerCase() === name.toLowerCase());
     const needsOk = requireApproval && !flagged;
-    const dual = needsOk && siteMode === "secure" && !docBlocked;
     const badge = needsOk || docBlocked ? "—" : `V-${badgeSeq}`;
     if (!needsOk && !docBlocked) setBadgeSeq((n) => n + 1);
-    const v = { id: Date.now(), name, company: company || "—", host, purpose, method, badge, zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: docBlocked ? "held" : flagged ? "held" : dual ? "awaiting-dual" : needsOk ? "awaiting-approval" : "checked-in", flagged, docBlocked, hostApproved: false, secApproved: false, hostResponse: null };
+    const v = { id: Date.now(), name, company: company || "—", host, purpose, method, badge, zoneKey: ZONE_OF[purpose], checkinAt: Date.now(), windowMins: 240, status: docBlocked ? "held" : flagged ? "held" : needsOk ? "awaiting-approval" : "checked-in", flagged, docBlocked, hostResponse: null };
     setVisitors((s) => [v, ...s]);
     if (inviteId) setInvites((s) => s.map((i) => (i.id === inviteId ? { ...i, used: true } : i)));
     if (docBlocked) { addAlert({ sev: "warning", title: `Compliance hold — ${name}`, detail: "Contractor permit-to-work has expired. Badge blocked until document renewed." }); logAudit("Kiosk", "Compliance hold", `${name} · expired permit-to-work · badge blocked`); }
     else if (flagged) { addAlert({ sev: "danger", title: `Watchlist match — ${name}`, detail: "Check-in held at kiosk. Security review required before entry." }); logAudit("Kiosk", "Watchlist hit", `${name} · check-in held for security review`); }
-    else if (dual) { ping(`Secure site: ${name} needs both host and security approval`); logAudit("Kiosk", "Dual approval requested", `${name} · walk-in · secure site (${siteName})`); }
     else if (needsOk) { ping(`Approval request sent to ${host.split(" —")[0]} — walk-in visitor ${name}`); logAudit("Kiosk", "Approval requested", `${name} · walk-in · host ${host.split(" —")[0]}`); }
     else { ping(`${host.split(" —")[0]} notified on WhatsApp: ${name} has arrived`); logAudit("Kiosk", "Check-in", `${name} · ${method} · badge ${badge}`); }
     return v;
@@ -87,29 +83,19 @@ export default function App() {
     logAudit("Reception", "Slip digitized", `${name} · ${slipRef} · awaiting host confirmation`);
   };
 
-  const createInvite = (inv, source = "Host portal") => {
+  const createInvite = (inv) => {
     const ref = `QR-${88216 + invites.length}`;
     setInvites((s) => [...s, { id: Date.now(), ...inv, ref, used: false }]);
-    if (source === "Host portal") ping(`Invite ${ref} sent to ${inv.name} on WhatsApp, email and SMS`);
-    else ping(`Check-in code ${ref} generated for ${inv.name}${inv.preVerified ? " — identity pre-verified" : ""}`);
-    logAudit(source, "Invite created", `${inv.name} · ${ref} · ${inv.purpose}${inv.preVerified ? " · pre-verified" : ""}`);
-    return ref;
+    ping(`Invite ${ref} sent to ${inv.name} on WhatsApp, email and SMS`);
+    logAudit("Host portal", "Invite created", `${inv.name} · ${ref} · ${inv.purpose}`);
   };
-
-  const markInviteVerified = (id) => setInvites((s) => s.map((i) => (i.id === id ? { ...i, preVerified: true } : i)));
 
   const hostAct = (v, action) => {
     if (action === "Approve slip") {
-      if (v.status === "awaiting-dual") {
-        update(v.id, { hostApproved: true, hostResponse: "Approved by host — awaiting security" });
-        ping(`${v.name}: host approved — now needs security sign-off (secure site)`);
-        logAudit(v.host.split(" —")[0], "Host approved (secure site)", `${v.name} · awaiting security sign-off`);
-      } else {
-        const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
-        update(v.id, { status: "checked-in", badge, checkinAt: Date.now(), hostResponse: "Approved" });
-        ping(`${v.name} approved — badge ${badge} issued at reception`);
-        logAudit(v.host.split(" —")[0], "Approved", `${v.name} · badge ${badge} issued`);
-      }
+      const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
+      update(v.id, { status: "checked-in", badge, checkinAt: Date.now(), hostResponse: "Approved" });
+      ping(`${v.name} approved — badge ${badge} issued at reception`);
+      logAudit(v.host.split(" —")[0], "Approved", `${v.name} · badge ${badge} issued`);
     } else if (action === "Deny") {
       update(v.id, { status: "denied", hostResponse: "Denied" });
       addAlert({ sev: "warning", title: `Entry denied — ${v.name}`, detail: "Host denied the visit. Badge deactivated, reception informed." });
@@ -129,19 +115,6 @@ export default function App() {
   const markCollected = (id) => setDeliveries((s) => s.map((d) => (d.id === id ? { ...d, collected: true } : d)));
   const kioskCheckout = (v) => { update(v.id, { status: "checked-out" }); ping(`${v.name} checked out — badge ${v.badge} deactivated`); logAudit("Kiosk", "Check-out", `${v.name} · badge ${v.badge} deactivated`); };
 
-  const securityDualApprove = (v, ok) => {
-    if (ok) {
-      const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
-      update(v.id, { status: "checked-in", secApproved: true, badge, checkinAt: Date.now() });
-      ping(`Security signed off — ${v.name} badge ${badge} issued (secure site)`);
-      logAudit("Security", "Security sign-off", `${v.name} · dual approval complete · badge ${badge}`);
-    } else {
-      update(v.id, { status: "denied", secApproved: false, hostResponse: "Denied by security" });
-      ping(`${v.name} rejected by security — host approval was not sufficient`);
-      logAudit("Security", "Security sign-off rejected", `${v.name} · entry denied · logged for audit`);
-    }
-  };
-
   const securityRelease = (v, ok) => {
     if (ok) {
       const badge = `V-${badgeSeq}`; setBadgeSeq((n) => n + 1);
@@ -158,7 +131,7 @@ export default function App() {
   const onSite = visitors.filter((v) => v.status === "checked-in" || v.status === "safe");
   const isOver = (v) => v.status === "checked-in" && (Date.now() - v.checkinAt) / 60000 > v.windowMins;
   const activeAlerts = alerts.filter((a) => !a.reviewed).length + onSite.filter(isOver).length;
-  const pendingHost = visitors.filter((v) => (v.status === "checked-in" && !v.hostResponse) || v.status === "awaiting-approval" || v.status === "held" || (v.status === "awaiting-dual" && !v.hostApproved));
+  const pendingHost = visitors.filter((v) => (v.status === "checked-in" && !v.hostResponse) || v.status === "awaiting-approval" || v.status === "held");
 
   const tabs = [
     ["kiosk", "Kiosk", QrCode],
@@ -263,17 +236,17 @@ export default function App() {
         <main className={`${isMobile ? "max-w-md" : "max-w-4xl"} mx-auto p-4 sm:p-6`}>
           {view === "kiosk" && (
             <Screen id="kiosk" isMobile={isMobile}>
-              <Kiosk checkIn={checkIn} invites={invites} visitors={visitors} kioskCheckout={kioskCheckout} compact={isMobile} siteMode={siteMode} siteName={siteName} markInviteVerified={markInviteVerified} />
+              <Kiosk checkIn={checkIn} invites={invites} visitors={visitors} kioskCheckout={kioskCheckout} compact={isMobile} />
             </Screen>
           )}
           {view === "reception" && (
             <Screen id="reception" isMobile={isMobile}>
-              <Reception slipEntry={slipEntry} createInvite={createInvite} markInviteVerified={markInviteVerified} checkIn={checkIn} invites={invites} visitors={visitors} isOver={isOver} addDelivery={addDelivery} deliveries={deliveries} siteMode={siteMode} siteName={siteName} />
+              <Reception slipEntry={slipEntry} visitors={visitors} isOver={isOver} addDelivery={addDelivery} deliveries={deliveries} />
             </Screen>
           )}
           {view === "security" && (
             <Screen id="security" isMobile={isMobile}>
-              <Security visitors={visitors} onSite={onSite} isOver={isOver} alerts={alerts} setAlerts={setAlerts} update={update} evac={evac} setEvac={setEvac} addAlert={addAlert} ping={ping} securityRelease={securityRelease} securityDualApprove={securityDualApprove} siteMode={siteMode} siteName={siteName} />
+              <Security visitors={visitors} onSite={onSite} isOver={isOver} alerts={alerts} setAlerts={setAlerts} update={update} evac={evac} setEvac={setEvac} addAlert={addAlert} ping={ping} securityRelease={securityRelease} />
             </Screen>
           )}
           {view === "host" && (
@@ -283,7 +256,7 @@ export default function App() {
           )}
           {view === "admin" && (
             <Screen id="admin" isMobile={isMobile}>
-              <Admin watchlist={watchlist} setWatchlist={setWatchlist} audit={audit} visitors={visitors} logAudit={logAudit} ping={ping} siteMode={siteMode} setSiteMode={setSiteMode} siteName={siteName} setSiteName={setSiteName} />
+              <Admin watchlist={watchlist} setWatchlist={setWatchlist} audit={audit} visitors={visitors} logAudit={logAudit} ping={ping} />
             </Screen>
           )}
         </main>
@@ -366,7 +339,7 @@ function StatusPill({ v, isOver }) {
 }
 
 /* ================= Kiosk ================= */
-function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, siteMode = "manual", siteName = "Corporate HQ", markInviteVerified }) {
+function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false }) {
   const [step, setStep] = useState("home");
   const [method, setMethod] = useState("");
   const [f, setF] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null });
@@ -382,34 +355,14 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
   const [pendingId, setPendingId] = useState(null);
   const [lang, setLang] = useState("en");
   const [rating, setRating] = useState(0);
-  const [secPhase, setSecPhase] = useState(0);
-  const [needsVerifyInvite, setNeedsVerifyInvite] = useState(null); // invite awaiting kiosk verification, or null = fresh registration
-  const [quickVerifyTarget, setQuickVerifyTarget] = useState(null);
-  const [qvPhase, setQvPhase] = useState(0);
-  const QV_STEPS = ["Matching live face to uploaded photo…", "Liveness check — real person confirmed", "Identity confirmed"];
-  const runQuickVerify = (inv) => {
-    setQuickVerifyTarget(inv); setQvPhase(1); setStep("quickverify");
-    [2, 3].forEach((n, i) => setTimeout(() => {
-      setQvPhase(n);
-      if (n === 3) setTimeout(() => {
-        if (markInviteVerified) markInviteVerified(inv.id);
-        setF({ name: inv.name, company: inv.company, host: inv.host, purpose: inv.purpose, inviteId: inv.id, preVerified: true });
-        setStep("details");
-      }, 600);
-    }, 800 * (i + 1)));
-  };
-  const [kvDocPhase, setKvDocPhase] = useState(0);
-  const [kvScannedDoc, setKvScannedDoc] = useState(null);
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [otpPhase, setOtpPhase] = useState(0);
-  const [otpMatch, setOtpMatch] = useState(null);
   const [escalated, setEscalated] = useState(0);
   const [walletAdded, setWalletAdded] = useState(false);
   const [offline, setOffline] = useState(false);
   const [hq1, setHq1] = useState(false);
   const [hq2, setHq2] = useState(false);
-  const [selPurpose, setSelPurpose] = useState(PURPOSES[0]);
 
   const T = {
     en: { welcome: "Welcome to Acme Corp", how: "How would you like to check in?", qr: "Scan QR invite", face: "Face check-in", idd: "Scan ID document", otp: "Phone number / OTP", walk: "Walk-in visitor", out: "Leaving? Tap here to check out", hint: "Paper gate pass? A receptionist will scan and verify it — see the Reception tab. Questions? Tap the assistant at the bottom right." },
@@ -439,7 +392,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [step]);
 
-  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); setSecPhase(0); setPhone(""); setOtp(""); setOtpPhase(0); setOtpMatch(null); setEscalated(0); setWalletAdded(false); setHq1(false); setHq2(false); setSelPurpose(PURPOSES[0]); setNeedsVerifyInvite(null); setKvDocPhase(0); setKvScannedDoc(null); setQuickVerifyTarget(null); setQvPhase(0); };
+  const reset = () => { setStep("home"); setMethod(""); setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setAgree(false); setDpdp(false); setErr(""); setIssued(null); setScanMsg(""); setFacePhase(0); setCount(null); setPhotoDone(false); setPendingId(null); setRating(0); setPhone(""); setOtp(""); setOtpPhase(0); setEscalated(0); setWalletAdded(false); setHq1(false); setHq2(false); };
 
   const takePhoto = () => {
     setCount(3);
@@ -450,41 +403,18 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
   };
 
   const finishWalkIn = () => {
-    if (needsVerifyInvite && markInviteVerified) markInviteVerified(needsVerifyInvite.id);
     const v = checkIn({ ...f, method, requireApproval: true });
     if (v.status === "held") { setIssued(v); setStep("badge"); }
     else { setPendingId(v.id); setStep("waiting"); }
   };
 
-  const SEC_STEPS = ["Scanning face…", "Liveness check — real person confirmed", "Face matched to scanned ID"];
-  const startFaceStage = () => {
-    setSecPhase(1);
-    [2, 3].forEach((n, i) => setTimeout(() => {
-      setSecPhase(n);
-      if (n === 3) setTimeout(() => finishWalkIn(), 600);
-    }, 800 * (i + 1)));
-  };
-  const kvScanDoc = (d) => {
-    setKvScannedDoc(d); setKvDocPhase(1);
-    [2, 3, 4].forEach((n, i) => setTimeout(() => {
-      setKvDocPhase(n);
-      if (n === 4) setTimeout(() => startFaceStage(), 600);
-    }, 700 * (i + 1)));
-  };
-  const runSecVerify = () => {
-    setKvDocPhase(0); setKvScannedDoc(null); setSecPhase(0);
-    setStep("secverify");
-  };
-
   const pick = (m) => {
     setMethod(m); setErr("");
     if (m === "Scan QR invite") setStep("qr");
-    else if (m === "Face check-in") {
-      if (verifiedInvites.length === 0) { setNeedsVerifyInvite(null); setStep("needsverify"); return; }
-      setStep("face");
-    }
+    else if (m === "Face check-in") { setStep("face"); runFace(); }
+    else if (m === "Scan ID document") { setStep("idscan"); setIdPhase(0); }
     else if (m === "Phone / OTP") { setStep("otp"); setOtpPhase(0); setPhone(""); setOtp(""); }
-    else if (m === "Register & verify") { setNeedsVerifyInvite(null); setF({ name: "", company: "", host: HOSTS[0], purpose: selPurpose, inviteId: null }); setStep("details"); }
+    else { setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); }
   };
 
   const [idPhase, setIdPhase] = useState(0);
@@ -498,23 +428,16 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
     setIdDoc(d); setIdPhase(1);
     [2, 3, 4].forEach((n, i) => setTimeout(() => {
       setIdPhase(n);
-      if (n === 4) setTimeout(() => { setF({ name: d.name, company: "", host: HOSTS[0], purpose: selPurpose, inviteId: null }); setStep("details"); }, 700);
+      if (n === 4) setTimeout(() => { setF({ name: d.name, company: "", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); }, 700);
     }, 900 * (i + 1)));
   };
 
-  const [faceMatchName, setFaceMatchName] = useState("");
-  const verifiedInvites = invites.filter((i) => !i.used && (i.preVerified || i.docsUploaded));
-  const FACE_STEPS = ["Detecting face…", "Liveness check — real person confirmed", "Matching against enrolled visitors…", ""];
-  const runFace = (inv) => {
+  const FACE_STEPS = ["Detecting face…", "Liveness check — real person confirmed", "Matching against enrolled visitors…", "Match found: Priya Sharma · 98.7% confidence"];
+  const runFace = () => {
     setFacePhase(0);
-    setFaceMatchName(`${inv.name} · 99.1% confidence (${inv.preVerified ? "registered face match" : "matched to uploaded photo"})`);
     [1, 2, 3, 4].forEach((n, i) => setTimeout(() => {
       setFacePhase(n);
-      if (n === 4) setTimeout(() => {
-        if (!inv.preVerified && markInviteVerified) markInviteVerified(inv.id);
-        setF({ name: inv.name, company: inv.company, host: inv.host, purpose: inv.purpose, inviteId: inv.id, preVerified: true });
-        setStep("details");
-      }, 700);
+      if (n === 4) setTimeout(() => { setF({ name: "Priya Sharma", company: "Northwind Ltd", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); }, 700);
     }, 900 * (i + 1)));
   };
 
@@ -522,8 +445,6 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
     setScanMsg(`Reading pass ${inv.ref}…`);
     setTimeout(() => {
       setScanMsg("");
-      if (!inv.preVerified && inv.docsUploaded) { runQuickVerify(inv); return; }
-      if ((siteMode === "secure" || inv.preup) && !inv.preVerified) { setNeedsVerifyInvite(inv); setStep("needsverify"); return; }
       setF({ name: inv.name, company: inv.company, host: inv.host, purpose: inv.purpose, inviteId: inv.id, preup: inv.preup });
       setStep("details");
     }, 900);
@@ -534,24 +455,19 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
     if (!agree || !dpdp) { setErr("Tick both the agreement and data-consent boxes to continue"); return; }
     if (f.purpose === "Contractor work" && (!hq1 || !hq2)) { setErr("Complete the contractor safety questionnaire to continue"); return; }
     setErr("");
-    const targetInvite = f.inviteId ? invites.find((i) => i.id === f.inviteId) : null;
-    const alreadyVerified = targetInvite ? targetInvite.preVerified : false;
-    const needsPipeline = method === "Register & verify" || ((siteMode === "secure" || (targetInvite && targetInvite.preup)) && f.inviteId && !alreadyVerified);
-    if (needsPipeline) { setNeedsVerifyInvite(targetInvite && !alreadyVerified ? targetInvite : null); setStep("photo"); return; }
+    if (isWalkIn) { setStep("photo"); return; }
     setStep("printing");
     setTimeout(() => { const v = checkIn({ ...f, method }); setIssued(v); setStep("badge"); }, 1700);
   };
 
   const open = invites.filter((i) => !i.used);
   const dots = ["home", "details", "nda", "badge"];
-  const dotIdx = step === "qr" || step === "face" ? 0 : (step === "secverify" || step === "waiting") ? dots.indexOf("nda") : Math.max(0, dots.indexOf(step === "printing" ? "badge" : step));
+  const dotIdx = step === "qr" || step === "face" ? 0 : Math.max(0, dots.indexOf(step === "printing" ? "badge" : step));
 
   return (
     <div className={`bg-slate-200 rounded-2xl relative ${compact ? "p-2" : "p-4 sm:p-6"}`}>
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-sm text-slate-600"><Building2 size={16} /> {siteName}
-          <Pill tone={siteMode === "secure" ? "red" : "gray"}>{siteMode === "secure" ? "Secure workflow" : "Manual workflow"}</Pill>
-        </div>
+        <div className="flex items-center gap-2 text-sm text-slate-600"><Building2 size={16} /> Main lobby kiosk</div>
         <div className="flex items-center gap-2">
           <button onClick={() => setOffline(!offline)} className={`flex items-center gap-1 text-[10px] rounded-full px-2 py-1 border ${offline ? "border-amber-400 bg-amber-50 text-amber-800" : "border-slate-300 text-slate-500 hover:bg-slate-100"}`}>
             {offline ? <WifiOff size={11} /> : <Wifi size={11} />} {offline ? "Offline" : "Online"}
@@ -570,9 +486,9 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
                 <Globe size={13} /> {lang === "en" ? "हिन्दी" : lang === "hi" ? "தமிழ்" : "English"}
               </button>
             </div>
-            <p className="text-sm text-slate-500 mb-3">{t.how}</p>
-            <div className={`grid gap-3 ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`} style={compact ? { gridTemplateColumns: "1fr 1fr" } : undefined}>
-              {[[t.qr, "Scan QR invite", QrCode], [t.face, "Face check-in", ScanFace], [t.otp, "Phone / OTP", Phone], ["Register here", "Register & verify", UserPlus]].map(([label, key, Icon]) => (
+            <p className="text-sm text-slate-500 mb-5">{t.how}</p>
+            <div className={`grid gap-3 ${compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3"}`} style={compact ? { gridTemplateColumns: "1fr 1fr" } : undefined}>
+              {[[t.qr, "Scan QR invite", QrCode], [t.face, "Face check-in", ScanFace], [t.idd, "Scan ID document", CreditCard], [t.otp, "Phone / OTP", Phone], [t.walk, "Walk-in visitor", UserPlus]].map(([label, key, Icon]) => (
                 <button key={key} onClick={() => pick(key)} className="flex flex-col items-center gap-2 border border-slate-300 rounded-xl py-5 px-2 hover:border-violet-500 hover:bg-violet-50">
                   <Icon size={26} className="text-slate-700" /><span className="text-xs text-center">{label}</span>
                 </button>
@@ -656,28 +572,14 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
                 <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98xxx xxx21" disabled={otpPhase > 0} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
               </label>
               {otpPhase === 0 ? (
-                <button onClick={() => {
-                  if (!phone.trim()) return;
-                  const digits = phone.replace(/\D/g, "").slice(-10);
-                  const match = invites.find((i) => !i.used && i.phone && i.phone.replace(/\D/g, "").slice(-10) === digits);
-                  setOtpMatch(match || null);
-                  setOtpPhase(1); setErr("");
-                }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Send OTP on WhatsApp / SMS</button>
+                <button onClick={() => { if (phone.trim()) { setOtpPhase(1); setErr(""); } }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Send OTP on WhatsApp / SMS</button>
               ) : (
                 <>
-                  <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={13} /> Code sent{otpMatch ? ` to ${otpMatch.name}'s registered number` : ""}. <span className="text-slate-400">(Demo: the code is 4821)</span></p>
+                  <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={13} /> Code sent. <span className="text-slate-400">(Demo: the code is 4821)</span></p>
                   <label className="text-xs text-slate-500 block">One-time code
                     <input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="4-digit code" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
                   </label>
-                  <button onClick={() => {
-                    if (otp.trim() !== "4821") { setErr("That code does not match — try 4821 (demo)"); return; }
-                    if (otpMatch && !otpMatch.preVerified && otpMatch.docsUploaded) { runQuickVerify(otpMatch); return; }
-                    if ((siteMode === "secure" || (otpMatch && otpMatch.preup)) && !(otpMatch && otpMatch.preVerified)) { setNeedsVerifyInvite(otpMatch || null); setStep("needsverify"); return; }
-                    if (!otpMatch) { setNeedsVerifyInvite(null); setStep("needsverify"); return; }
-                    setErr("");
-                    setF({ name: otpMatch.name, company: otpMatch.company, host: otpMatch.host, purpose: otpMatch.purpose, inviteId: otpMatch.id, preVerified: !!otpMatch.preVerified });
-                    setStep("details");
-                  }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Verify code</button>
+                  <button onClick={() => { if (otp.trim() === "4821") { setErr(""); setF({ name: "Priya Sharma", company: "Northwind Ltd", host: HOSTS[0], purpose: PURPOSES[0], inviteId: null }); setStep("details"); } else setErr("That code does not match — try 4821 (demo)"); }} className="w-full text-sm bg-violet-500 text-white rounded-lg py-2.5 hover:bg-violet-600">Verify code</button>
                 </>
               )}
               {err && <p className="text-xs text-rose-600">{err}</p>}
@@ -689,37 +591,18 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
         {step === "face" && (
           <>
             <h2 className="text-xl font-semibold text-slate-800 mb-1">Look at the camera</h2>
-            <p className="text-sm text-slate-500 mb-4">Touchless check-in — matches your face against what was enrolled at registration.</p>
+            <p className="text-sm text-slate-500 mb-4">Touchless check-in for enrolled visitors.</p>
             <div className="relative mx-auto w-48 h-48 border-2 border-violet-500 rounded-full scanframe mb-4 flex items-center justify-center bg-slate-50">
               <ScanFace size={80} className="text-slate-300" />
             </div>
-            {facePhase === 0 && verifiedInvites.length > 0 ? (
-              <>
-                <p className="text-xs text-slate-400 text-center mb-3">Demo: no real camera here — tap the visitor to simulate the match.</p>
-                <div className="grid gap-2 max-w-xs mx-auto">
-                  {verifiedInvites.map((inv) => (
-                    <button key={inv.id} onClick={() => runFace(inv)} className="flex items-center gap-3 border border-slate-300 rounded-lg px-3 py-2 hover:border-violet-500 hover:bg-violet-50 text-left">
-                      <ScanFace size={18} className="text-violet-700 shrink-0" />
-                      <span className="text-sm">{inv.name}<span className="block text-xs text-slate-500" style={mono}>{inv.ref} · {inv.preVerified ? "verified at registration" : "photo on file — tap to confirm live match"}</span></span>
-                    </button>
-                  ))}
-                  {siteMode === "secure" ? (
-                    <p className="text-xs text-slate-400 mt-1">Not on this list? This is a secure site — please complete ID + face verification at Reception first.</p>
-                  ) : (
-                    <button onClick={() => { setF({ name: "", company: "", host: HOSTS[0], purpose: selPurpose, inviteId: null }); setMethod("Register & verify"); setStep("details"); }} className="text-xs text-slate-400 hover:underline mt-1">Not on this list — register here</button>
-                  )}
+            <div className="max-w-xs mx-auto space-y-2">
+              {FACE_STEPS.map((s, i) => (
+                <div key={s} className={`flex items-center gap-2 text-sm ${facePhase > i ? "text-emerald-700" : facePhase === i ? "text-slate-600" : "text-slate-300"}`}>
+                  {facePhase > i ? <CheckCircle2 size={15} /> : <span className={`w-3.5 h-3.5 rounded-full border ${facePhase === i ? "border-violet-500 livedot" : "border-slate-300"}`} />}
+                  {s}
                 </div>
-              </>
-            ) : (
-              <div className="max-w-xs mx-auto space-y-2">
-                {FACE_STEPS.map((s, i) => (
-                  <div key={i} className={`flex items-center gap-2 text-sm ${facePhase > i ? "text-emerald-700" : facePhase === i ? "text-slate-600" : "text-slate-300"}`}>
-                    {facePhase > i ? <CheckCircle2 size={15} /> : <span className={`w-3.5 h-3.5 rounded-full border ${facePhase === i ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                    {i === 3 ? `Match found: ${faceMatchName}` : s}
-                  </div>
-                ))}
-              </div>
-            )}
+              ))}
+            </div>
             <button onClick={reset} className="mt-5 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100 flex items-center gap-1"><ArrowLeft size={14} /> Cancel</button>
           </>
         )}
@@ -775,9 +658,9 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
               Method: {method}
               {f.inviteId && " — invite found, details pulled from your pre-registration"}
               {f.inviteId && f.preup && " · ID + selfie pre-uploaded, identity pre-verified"}
-              {method === "Face check-in" && (f.preVerified ? " — face matched to your secure-site registration, identity already verified" : " — returning visitor recognized, details pre-filled")}
+              {method === "Face check-in" && " — returning visitor recognized, details pre-filled"}
               {method === "Scan ID document" && " — name read from your document, add the rest"}
-              {method === "Phone / OTP" && (f.inviteId ? (f.preVerified ? " — number matched to your secure-site registration, identity already verified" : " — number matched to your registration, details pre-filled") : " — no registration found for this number, demo visitor used")}
+              {method === "Phone / OTP" && " — number matched to a pre-registered visitor"}
             </p>
             <div className="grid sm:grid-cols-2 gap-3 mb-3">
               <label className="text-xs text-slate-500">Full name
@@ -836,7 +719,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
         {step === "photo" && (
           <>
             <h2 className="text-xl font-semibold text-slate-800 mb-1">Photo for your badge</h2>
-            <p className="text-sm text-slate-500 mb-4">A photo is needed for your badge, plus {siteMode === "secure" ? "identity verification and " : ""}host approval before it's issued.</p>
+            <p className="text-sm text-slate-500 mb-4">Walk-in visitors need a photo and host approval before a badge is issued.</p>
             <div className="relative mx-auto w-44 h-44 rounded-full border-2 border-violet-500 scanframe mb-4 flex items-center justify-center bg-slate-50 overflow-hidden">
               {photoDone ? (
                 <div className="w-full h-full bg-emerald-100 flex items-center justify-center text-3xl font-medium text-emerald-800">{initials(f.name || "V ?")}</div>
@@ -851,7 +734,7 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
             {photoDone ? (
               <div className="text-center">
                 <p className="text-sm text-emerald-700 mb-4 flex items-center justify-center gap-1"><CheckCircle2 size={15} /> Photo captured and attached to your visit</p>
-                <button onClick={siteMode === "secure" ? runSecVerify : finishWalkIn} className="text-sm bg-violet-500 text-white rounded-lg px-5 py-2.5 hover:bg-violet-600 flex items-center gap-1 mx-auto">{siteMode === "secure" ? "Verify identity & request approval" : "Request host approval"} <ArrowRight size={14} /></button>
+                <button onClick={finishWalkIn} className="text-sm bg-violet-500 text-white rounded-lg px-5 py-2.5 hover:bg-violet-600 flex items-center gap-1 mx-auto">Request host approval <ArrowRight size={14} /></button>
                 <button onClick={() => { setPhotoDone(false); setCount(null); }} className="block mx-auto mt-2 text-xs text-slate-500 hover:underline">Retake photo</button>
               </div>
             ) : (
@@ -863,130 +746,18 @@ function Kiosk({ checkIn, invites, visitors, kioskCheckout, compact = false, sit
           </>
         )}
 
-        {step === "secverify" && (
-          <div className="py-4">
-            <h2 className="text-lg font-semibold text-slate-800 mb-1 text-center">Secure-site identity verification</h2>
-            <p className="text-xs text-slate-500 mb-5 text-center">{siteName} requires ID and face verification before your request can be sent for approval.</p>
-
-            <div className="max-w-sm mx-auto space-y-4">
-              <div>
-                <p className="text-xs font-medium text-slate-600 mb-2">Step 1 — Scan government ID</p>
-                {kvDocPhase === 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {SAMPLE_IDS.map((d) => (
-                      <button key={d.label} onClick={() => kvScanDoc(d)} className="flex flex-col items-center gap-1 border border-slate-300 rounded-lg py-3 px-2 hover:border-violet-500 hover:bg-violet-50">
-                        <CreditCard size={20} className="text-violet-700" />
-                        <span className="text-xs">{d.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 border border-slate-200 rounded-lg p-3 bg-slate-50">
-                    {kvScannedDoc && <p className="text-xs text-slate-500 flex items-center gap-1.5 mb-1"><CreditCard size={12} /> {kvScannedDoc.doc} · <span style={mono}>{kvScannedDoc.num}</span></p>}
-                    {ID_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${kvDocPhase > i + 1 ? "text-emerald-700" : kvDocPhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {kvDocPhase > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${kvDocPhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className={kvDocPhase < 4 ? "opacity-40" : ""}>
-                <p className="text-xs font-medium text-slate-600 mb-2">Step 2 — Scan face</p>
-                <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 flex flex-col items-center">
-                  <div className="w-16 h-16 rounded-full border-2 border-violet-500 flex items-center justify-center bg-white mb-2 scanframe">
-                    <ScanFace size={28} className="text-slate-300" />
-                  </div>
-                  <div className="space-y-1.5 w-full">
-                    {SEC_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${secPhase > i + 1 ? "text-emerald-700" : secPhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {secPhase > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${secPhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {step === "waiting" && pending && (
           <div className="text-center py-8">
             <div className="mx-auto w-14 h-14 rounded-full border-2 border-violet-500 scanframe flex items-center justify-center mb-4"><Bell size={24} className="text-emerald-700" /></div>
-            <h2 className="text-xl font-semibold text-slate-800 mb-1">
-              {pending.status === "awaiting-dual"
-                ? (pending.hostApproved ? "Host approved — waiting for security" : `Waiting for ${pending.host.split(" —")[0]} and security to approve`)
-                : `Waiting for ${pending.host.split(" —")[0]} to approve`}
-            </h2>
-            <p className="text-sm text-slate-500 mb-1">
-              {pending.status === "awaiting-dual"
-                ? "This is a secure site — both host and security must sign off before a badge is issued."
-                : "Your host has been notified on WhatsApp."}
-            </p>
-            <p className="text-xs text-slate-400 mb-5">Demo: switch to the Host app tab, tap Confirm (or Deny){pending.status === "awaiting-dual" ? ", then the Security tab to complete sign-off" : ""}, then come back here — this screen updates live.</p>
-            {pending.status === "awaiting-dual" ? (
-              <div className="flex justify-center gap-2 mb-1">
-                <span className={`inline-flex items-center gap-1.5 text-xs rounded-full px-3 py-1.5 ${pending.hostApproved ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>
-                  {pending.hostApproved ? <CheckCircle2 size={13} /> : <span className="w-2 h-2 rounded-full bg-amber-500 livedot" />} Host
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-xs rounded-full px-3 py-1.5 bg-slate-100 text-slate-600">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 livedot" /> Security
-                </span>
-              </div>
-            ) : (
-              <div className="inline-flex items-center gap-2 text-xs bg-slate-100 rounded-full px-3 py-1.5 text-slate-600">
-                <span className="w-2 h-2 rounded-full bg-amber-500 livedot" /> Status: awaiting approval
-              </div>
-            )}
+            <h2 className="text-xl font-semibold text-slate-800 mb-1">Waiting for {pending.host.split(" —")[0]} to approve</h2>
+            <p className="text-sm text-slate-500 mb-1">Your host has been notified on WhatsApp.</p>
+            <p className="text-xs text-slate-400 mb-5">Demo: switch to the Host app tab, tap Confirm (or Deny), then come back here — this screen updates live.</p>
+            <div className="inline-flex items-center gap-2 text-xs bg-slate-100 rounded-full px-3 py-1.5 text-slate-600">
+              <span className="w-2 h-2 rounded-full bg-amber-500 livedot" /> Status: awaiting approval
+            </div>
             {escalated === 1 && <p className="text-xs text-amber-700 mt-3 flex items-center justify-center gap-1"><AlertTriangle size={13} /> No response after 2 min — escalated to the team channel (Slack / Teams).</p>}
             {escalated === 2 && <p className="text-xs text-rose-700 mt-1 flex items-center justify-center gap-1"><AlertTriangle size={13} /> Still no response after 5 min — escalated to floor admin.</p>}
             <button onClick={reset} className="block mx-auto mt-6 text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100">Cancel check-in</button>
-          </div>
-        )}
-
-        {step === "quickverify" && (
-          <div className="text-center py-8">
-            <div className="mx-auto w-44 h-44 rounded-full border-2 border-violet-500 scanframe mb-4 flex items-center justify-center bg-slate-50">
-              <ScanFace size={70} className="text-slate-300" />
-            </div>
-            <h2 className="text-lg font-semibold text-slate-800 mb-1">Quick face confirmation</h2>
-            <p className="text-xs text-slate-500 mb-4">{quickVerifyTarget?.name} pre-uploaded ID and a selfie — just confirming it's really them.</p>
-            <div className="max-w-xs mx-auto space-y-2">
-              {QV_STEPS.map((s, i) => (
-                <div key={s} className={`flex items-center gap-2 text-sm ${qvPhase > i + 1 ? "text-emerald-700" : qvPhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                  {qvPhase > i + 1 ? <CheckCircle2 size={15} /> : <span className={`w-3.5 h-3.5 rounded-full border shrink-0 ${qvPhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                  {s}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {step === "needsverify" && (
-          <div className="text-center py-8">
-            <ShieldAlert size={40} className="mx-auto text-amber-600 mb-3" />
-            <h2 className="text-xl font-semibold text-slate-800 mb-1">{needsVerifyInvite ? "Identity verification needed" : "No matching registration found"}</h2>
-            <p className="text-sm text-slate-500 mb-5 max-w-sm mx-auto">
-              {needsVerifyInvite
-                ? (needsVerifyInvite.preup && siteMode !== "secure"
-                    ? "Your host asked for ID and face verification before arrival, and it looks like it wasn't completed yet."
-                    : `${siteName} is a secure site — this code hasn't completed ID and face verification yet.`)
-                : (siteMode === "secure"
-                    ? `${siteName} is a secure site — no verified registration was found.`
-                    : "We couldn't find a registration matching that. You can register now instead.")}
-              {needsVerifyInvite ? " You can complete it right here, at Reception, or start a fresh registration." : ""}
-            </p>
-            <div className="flex flex-col items-center gap-2">
-              {needsVerifyInvite ? (
-                <button onClick={() => { setF({ name: needsVerifyInvite.name, company: needsVerifyInvite.company, host: needsVerifyInvite.host, purpose: needsVerifyInvite.purpose, inviteId: needsVerifyInvite.id }); setMethod("Register & verify"); setStep("details"); }} className="text-sm bg-violet-500 text-white rounded-lg px-5 py-2.5 hover:bg-violet-600 flex items-center gap-1.5"><ScanFace size={15} /> Verify now at this kiosk</button>
-              ) : (
-                <button onClick={() => { setF({ name: "", company: "", host: HOSTS[0], purpose: selPurpose, inviteId: null }); setMethod("Register & verify"); setStep("details"); }} className="text-sm bg-violet-500 text-white rounded-lg px-5 py-2.5 hover:bg-violet-600 flex items-center gap-1.5"><UserPlus size={15} /> Register as a new visitor</button>
-              )}
-              <button onClick={reset} className="text-sm border border-slate-300 rounded-lg px-4 py-2 hover:bg-slate-100">Back to start</button>
-            </div>
           </div>
         )}
 
@@ -1098,10 +869,9 @@ function KioskAssistant({ onClose, compact = false }) {
 }
 
 /* ================= Reception ================= */
-function Reception({ slipEntry, createInvite, markInviteVerified, checkIn, invites, visitors, isOver, addDelivery, deliveries, siteMode = "manual", siteName = "Corporate HQ" }) {
+function Reception({ slipEntry, visitors, isOver, addDelivery, deliveries }) {
   const [f, setF] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], slipRef: "" });
   const [sent, setSent] = useState(false);
-  const [r, setR] = useState({ name: "", company: "", email: "", phone: "", host: HOSTS[0], purpose: PURPOSES[0] });
   const [d, setD] = useState({ courier: "", pkg: "", host: HOSTS[0] });
   const logDelivery = () => {
     if (!d.courier.trim() || !d.pkg.trim()) return;
@@ -1110,173 +880,15 @@ function Reception({ slipEntry, createInvite, markInviteVerified, checkIn, invit
   };
   const submit = () => {
     if (!f.name.trim() || !f.slipRef.trim()) return;
-    if (siteMode === "secure" && !(slipDocPhase === 4 && slipFacePhase === 3)) return;
     slipEntry(f); setSent(true);
     setF({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], slipRef: "" });
-    setSlipDocPhase(0); setSlipScannedDoc(null); setSlipFacePhase(0);
     setTimeout(() => setSent(false), 4000);
-  };
-  const [slipDocPhase, setSlipDocPhase] = useState(0);
-  const [slipScannedDoc, setSlipScannedDoc] = useState(null);
-  const [slipFacePhase, setSlipFacePhase] = useState(0);
-  const slipScanDoc = (d) => {
-    setSlipScannedDoc(d); setSlipDocPhase(1);
-    [2, 3, 4].forEach((n, i) => setTimeout(() => setSlipDocPhase(n), 700 * (i + 1)));
-  };
-  const slipRunFace = () => {
-    setSlipFacePhase(1);
-    [2, 3].forEach((n, i) => setTimeout(() => setSlipFacePhase(n), 700 * (i + 1)));
-  };
-  const slipVerified = slipDocPhase === 4 && slipFacePhase === 3;
-  const matchedInvite = invites.find((i) => !i.used && i.name.toLowerCase() === r.name.trim().toLowerCase());
-
-  // Stage 1: document scan (OCR + authenticity) — required before face scan on secure sites
-  const SAMPLE_IDS = [
-    { label: "Driver's license", name: "Meena Iyer", num: "DL-4821 9930", doc: "Driving licence · India" },
-    { label: "Passport", name: "Tom Becker", num: "P 8842137", doc: "Passport · Germany" },
-  ];
-  const DOC_STEPS = ["Scanning document…", "Reading text (OCR)…", "Checking security features — hologram, fonts, MRZ…", "Document genuine — details extracted"];
-  const [docPhase, setDocPhase] = useState(0); // 0 idle, 1-4 running/done
-  const [scannedDoc, setScannedDoc] = useState(null);
-  const scanDoc = (d) => {
-    setScannedDoc(d); setDocPhase(1);
-    [2, 3, 4].forEach((n, i) => setTimeout(() => setDocPhase(n), 700 * (i + 1)));
-  };
-
-  // Stage 2: face scan — only enabled once the document stage is done
-  const FACE_VERIFY_STEPS = ["Scanning face…", "Liveness check — real person confirmed", "Face matched to scanned ID"];
-  const [facePhaseR, setFacePhaseR] = useState(0); // 0 idle, 1-3 running/done
-  const runFaceVerify = () => {
-    setFacePhaseR(1);
-    [2, 3].forEach((n, i) => setTimeout(() => setFacePhaseR(n), 700 * (i + 1)));
-  };
-  const verifyPhase = docPhase === 4 && facePhaseR === 3 ? 4 : 0; // combined gate used by registerVisitor
-
-  const [genCode, setGenCode] = useState(null); // { ref, name, preVerified }
-  const registerVisitor = () => {
-    if (!r.name.trim()) return;
-    if (siteMode === "secure" && verifyPhase < 4) return;
-    const ref = createInvite({ name: r.name, company: r.company, email: r.email, phone: r.phone, host: r.host, purpose: r.purpose, preVerified: siteMode === "secure" }, "Reception");
-    setGenCode({ ref, name: r.name, email: r.email, phone: r.phone, preVerified: siteMode === "secure" });
-    setR({ name: "", company: "", email: "", phone: "", host: HOSTS[0], purpose: PURPOSES[0] });
-    setDocPhase(0); setScannedDoc(null); setFacePhaseR(0);
   };
   return (
     <div className="grid lg:grid-cols-2 gap-4">
-      <Card className="lg:col-span-2">
-        <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><UserPlus size={18} /> Register visitor</h2>
-        <p className="text-xs text-slate-500 mb-2">Registration and check-in are separate steps. Register once here to get a check-in code — the visitor (or reception) uses that code later to actually check in.</p>
-        {siteMode === "secure" && (
-          <p className="text-xs bg-violet-50 border border-violet-200 text-violet-800 rounded-lg px-3 py-2 mb-3 flex items-center gap-1.5"><ShieldAlert size={13} /> {siteName} is a secure site — identity must be verified (face + ID) at registration, before a code can be issued.</p>
-        )}
-        <div className="space-y-3">
-          <label className="text-xs text-slate-500 block">Visitor name
-            <input value={r.name} onChange={(e) => setR({ ...r, name: e.target.value })} placeholder="Anjali Rao" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-          </label>
-          {matchedInvite && (
-            <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={13} /> Already has an open code ({matchedInvite.ref}) — no need to register again, just check in with that code below.</p>
-          )}
-          <label className="text-xs text-slate-500 block">Company
-            <input value={r.company} onChange={(e) => setR({ ...r, company: e.target.value })} placeholder="Company (optional)" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs text-slate-500 block">Email
-              <input value={r.email} onChange={(e) => setR({ ...r, email: e.target.value })} placeholder="anjali@company.com" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-            </label>
-            <label className="text-xs text-slate-500 block">Phone number
-              <input value={r.phone} onChange={(e) => setR({ ...r, phone: e.target.value })} placeholder="+91 98xxx xxx21" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
-            </label>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs text-slate-500 block">Who are they visiting?
-              <select value={r.host} onChange={(e) => setR({ ...r, host: e.target.value })} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{HOSTS.map((h) => <option key={h}>{h}</option>)}</select>
-            </label>
-            <label className="text-xs text-slate-500 block">Purpose
-              <select value={r.purpose} onChange={(e) => setR({ ...r, purpose: e.target.value })} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{PURPOSES.map((p) => <option key={p}>{p}</option>)}</select>
-            </label>
-          </div>
-
-          {siteMode === "secure" && (
-            <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-3">
-              <p className="text-xs font-medium text-slate-600">Required: identity verification (secure site)</p>
-
-              <div>
-                <p className="text-xs text-slate-500 mb-1.5">Step 1 — Scan government ID</p>
-                {docPhase === 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {SAMPLE_IDS.map((d) => (
-                      <button key={d.label} onClick={() => scanDoc(d)} disabled={!r.name.trim()} className="flex flex-col items-center gap-1 border border-slate-300 rounded-lg py-2.5 px-2 hover:border-violet-500 hover:bg-violet-50 disabled:opacity-40 bg-white">
-                        <CreditCard size={18} className="text-violet-700" />
-                        <span className="text-xs">{d.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {scannedDoc && (
-                      <p className="text-xs text-slate-500 flex items-center gap-1.5 mb-1"><CreditCard size={12} /> {scannedDoc.doc} · <span style={mono}>{scannedDoc.num}</span></p>
-                    )}
-                    {DOC_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${docPhase > i + 1 ? "text-emerald-700" : docPhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {docPhase > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${docPhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className={docPhase < 4 ? "opacity-40 pointer-events-none" : ""}>
-                <p className="text-xs text-slate-500 mb-1.5">Step 2 — Scan face (matched against the ID above)</p>
-                {facePhaseR === 0 ? (
-                  <button onClick={runFaceVerify} disabled={docPhase < 4} className="text-xs border border-violet-300 text-violet-700 rounded-lg px-3 py-2 hover:bg-violet-50 disabled:opacity-40 flex items-center gap-1.5 bg-white"><ScanFace size={13} /> Scan face to verify</button>
-                ) : (
-                  <div className="space-y-1.5">
-                    {FACE_VERIFY_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${facePhaseR > i + 1 ? "text-emerald-700" : facePhaseR === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {facePhaseR > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${facePhaseR === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {verifyPhase === 4 && (
-                <p className="text-xs text-emerald-700 flex items-center gap-1.5 border-t border-slate-200 pt-2"><CheckCircle2 size={13} /> Document and face both verified — ready to generate a check-in code.</p>
-              )}
-            </div>
-          )}
-
-          <button onClick={registerVisitor} disabled={!r.name.trim() || (siteMode === "secure" && verifyPhase < 4)} className="w-full bg-violet-500 text-white text-sm rounded-lg py-2.5 hover:bg-violet-600 disabled:opacity-40 flex items-center justify-center gap-1.5"><QrCode size={14} /> Generate check-in code</button>
-
-          {genCode && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
-              <p className="text-xs text-emerald-700 mb-1">Registered {genCode.name}{genCode.preVerified && " · identity verified"} — give this code to the visitor:</p>
-              <p className="text-lg font-semibold text-emerald-900" style={mono}>{genCode.ref}</p>
-              {(genCode.phone || genCode.email) && (
-                <p className="text-xs text-emerald-700 mt-1.5 flex items-center justify-center gap-1"><Send size={11} />
-                  Also sent {genCode.phone && "by SMS/WhatsApp"}{genCode.phone && genCode.email && " and "}{genCode.email && "by email"} to {genCode.phone || genCode.email}
-                </p>
-              )}
-              <p className="text-xs text-slate-400 mt-1">Check in anytime by scanning it at the Kiosk{genCode.phone && ", or with Phone / OTP using the same number"}.</p>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 text-xs text-slate-400 pt-1 border-t border-slate-100 flex-wrap">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300" /> 1. Registered{siteMode === "secure" ? " + verified" : ""}</span>
-            <ArrowRight size={11} />
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400" /> 2. Code issued</span>
-            <ArrowRight size={11} />
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> 3. Checked in (with code)</span>
-          </div>
-        </div>
-      </Card>
-
-
-      <Card className="lg:col-span-2">
+      <Card>
         <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><ClipboardList size={18} /> Paper slip conversion</h2>
-        <p className="text-xs text-slate-500 mb-4">Digitize a visitor's paper gate pass. The named host must confirm before a badge is issued — a slip alone never grants entry.{siteMode === "secure" && " On this secure site, ID + face verification is also required before the request can be sent."}</p>
+        <p className="text-xs text-slate-500 mb-4">Digitize a visitor's paper gate pass. The named host must confirm before a badge is issued — a slip alone never grants entry.</p>
         <div className="space-y-3">
           <label className="text-xs text-slate-500 block">Slip reference
             <input value={f.slipRef} onChange={(e) => setF({ ...f, slipRef: e.target.value })} placeholder="GP-1042" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
@@ -1293,62 +905,11 @@ function Reception({ slipEntry, createInvite, markInviteVerified, checkIn, invit
             </label>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500"><Camera size={14} /> Slip photographed and attached · ID checked against slip name</div>
-
-          {siteMode === "secure" && (
-            <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-3">
-              <p className="text-xs font-medium text-slate-600">Required: identity verification (secure site)</p>
-
-              <div>
-                <p className="text-xs text-slate-500 mb-1.5">Step 1 — Scan government ID</p>
-                {slipDocPhase === 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {SAMPLE_IDS.map((d) => (
-                      <button key={d.label} onClick={() => slipScanDoc(d)} disabled={!f.name.trim()} className="flex flex-col items-center gap-1 border border-slate-300 rounded-lg py-2.5 px-2 hover:border-violet-500 hover:bg-violet-50 disabled:opacity-40 bg-white">
-                        <CreditCard size={18} className="text-violet-700" />
-                        <span className="text-xs">{d.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {slipScannedDoc && <p className="text-xs text-slate-500 flex items-center gap-1.5 mb-1"><CreditCard size={12} /> {slipScannedDoc.doc} · <span style={mono}>{slipScannedDoc.num}</span></p>}
-                    {DOC_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${slipDocPhase > i + 1 ? "text-emerald-700" : slipDocPhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {slipDocPhase > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${slipDocPhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className={slipDocPhase < 4 ? "opacity-40 pointer-events-none" : ""}>
-                <p className="text-xs text-slate-500 mb-1.5">Step 2 — Scan face (matched against the ID above)</p>
-                {slipFacePhase === 0 ? (
-                  <button onClick={slipRunFace} disabled={slipDocPhase < 4} className="text-xs border border-violet-300 text-violet-700 rounded-lg px-3 py-2 hover:bg-violet-50 disabled:opacity-40 flex items-center gap-1.5 bg-white"><ScanFace size={13} /> Scan face to verify</button>
-                ) : (
-                  <div className="space-y-1.5">
-                    {FACE_VERIFY_STEPS.map((s, i) => (
-                      <div key={s} className={`flex items-center gap-2 text-xs ${slipFacePhase > i + 1 ? "text-emerald-700" : slipFacePhase === i + 1 ? "text-slate-600" : "text-slate-300"}`}>
-                        {slipFacePhase > i + 1 ? <CheckCircle2 size={13} /> : <span className={`w-3 h-3 rounded-full border shrink-0 ${slipFacePhase === i + 1 ? "border-violet-500 livedot" : "border-slate-300"}`} />}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {slipVerified && (
-                <p className="text-xs text-emerald-700 flex items-center gap-1.5 border-t border-slate-200 pt-2"><CheckCircle2 size={13} /> Document and face both verified — ready to send the host confirmation request.</p>
-              )}
-            </div>
-          )}
-
-          <button onClick={submit} disabled={siteMode === "secure" && !slipVerified} className="w-full bg-violet-500 text-white text-sm rounded-lg py-2.5 hover:bg-violet-600 disabled:opacity-40">Send host confirmation request</button>
+          <button onClick={submit} className="w-full bg-violet-500 text-white text-sm rounded-lg py-2.5 hover:bg-violet-600">Send host confirmation request</button>
           {sent && <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> Request sent — approve or deny it in the Host app tab.</p>}
         </div>
       </Card>
-      <Card className="lg:col-span-2">
+      <Card>
         <h2 className="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2"><Users size={18} /> Today at reception</h2>
         <div className="divide-y divide-slate-100">
           {visitors.slice(0, 7).map((v) => (
@@ -1425,13 +986,11 @@ function ZoneMap({ onSite, isOver }) {
   );
 }
 
-function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, setEvac, addAlert, ping, securityRelease, securityDualApprove, siteMode, siteName }) {
+function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, setEvac, addAlert, ping, securityRelease }) {
   const out = visitors.filter((v) => v.status === "checked-out").length;
   const active = alerts.filter((a) => !a.reviewed);
   const overs = onSite.filter(isOver);
   const held = visitors.filter((v) => v.status === "held");
-  const dualReady = visitors.filter((v) => v.status === "awaiting-dual" && v.hostApproved);
-  const dualWaitingHost = visitors.filter((v) => v.status === "awaiting-dual" && !v.hostApproved);
   const review = (id, disposition) => { setAlerts((s) => s.map((a) => (a.id === id ? { ...a, reviewed: true, disposition } : a))); };
   const simulate = () => addAlert({ sev: "danger", title: "Badge and face mismatch — gate A1", detail: "Camera AI: badge V-20455 presented by an unenrolled face. Entry blocked pending review." });
   const minsOn = (v) => Math.max(0, Math.floor((Date.now() - v.checkinAt) / 60000));
@@ -1506,35 +1065,6 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
         <p className="text-xs text-slate-400 mt-2">Green bar = current hour (live count). Peak so far: 11 am. Predicted evening peak: 4–5 pm (AI forecast, demo data).</p>
         <div className="mt-3 flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2"><Users size={13} /> Queue analytics: 2 people waiting at counter 1, avg wait 3 min — within threshold, no extra counter needed.</div>
       </Card>
-
-      {(dualReady.length > 0 || dualWaitingHost.length > 0) && (
-        <Card className="border-violet-300">
-          <h2 className="text-sm font-semibold text-violet-700 mb-1 flex items-center gap-2"><ShieldAlert size={16} /> Secure-site sign-off — {siteName}</h2>
-          <p className="text-xs text-slate-500 mb-3">This site requires both host <span className="font-medium">and</span> security approval before a badge is issued.</p>
-          <div className="space-y-2">
-            {dualReady.map((v) => (
-              <div key={v.id} className="flex items-center gap-3 bg-violet-50 rounded-lg px-3 py-2.5 flex-wrap">
-                <Avatar name={v.name} tone="bg-violet-100 text-violet-800" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{v.name} <Pill tone="green">Host approved</Pill></p>
-                  <p className="text-xs text-slate-500 truncate">{v.method} · host {v.host.split(" —")[0]} · {v.purpose.toLowerCase()} · awaiting your sign-off</p>
-                </div>
-                <button onClick={() => securityDualApprove(v, true)} className="text-xs bg-emerald-500 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-600 flex items-center gap-1"><UserCheck size={12} /> Sign off & issue badge</button>
-                <button onClick={() => securityDualApprove(v, false)} className="text-xs border border-rose-300 text-rose-700 rounded-lg px-3 py-1.5 hover:bg-rose-50 flex items-center gap-1"><UserX size={12} /> Reject</button>
-              </div>
-            ))}
-            {dualWaitingHost.map((v) => (
-              <div key={v.id} className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2.5 flex-wrap opacity-80">
-                <Avatar name={v.name} tone="bg-slate-200 text-slate-600" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{v.name} <Pill tone="gray">Waiting on host</Pill></p>
-                  <p className="text-xs text-slate-500 truncate">{v.method} · host {v.host.split(" —")[0]} · not yet ready for security review</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
       {held.length > 0 && (
         <Card className="border-rose-300">
@@ -1622,73 +1152,32 @@ function Security({ visitors, onSite, isOver, alerts, setAlerts, update, evac, s
 
 /* ================= Host app ================= */
 function HostApp({ pending, recent, hostAct, createInvite, invites, deliveries, markCollected }) {
-  const [inv, setInv] = useState({ name: "", company: "", email: "", phone: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
-  const [idFile, setIdFile] = useState(null); // { name }
-  const [selfieFile, setSelfieFile] = useState(null); // { name }
+  const [inv, setInv] = useState({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
   const [made, setMade] = useState(null);
   const arrivals = pending.filter((v) => v.status === "checked-in");
-  const approvals = pending.filter((v) => v.status === "awaiting-approval" || (v.status === "awaiting-dual" && !v.hostApproved));
+  const approvals = pending.filter((v) => v.status === "awaiting-approval");
   const held = pending.filter((v) => v.status === "held");
   const history = recent.filter((v) => v.hostResponse && v.status !== "awaiting-approval").slice(0, 4);
-  const bothUploaded = !!idFile && !!selfieFile;
   const make = () => {
     if (!inv.name.trim()) return;
-    createInvite({ ...inv, docsUploaded: inv.preup && bothUploaded });
+    createInvite(inv);
     setMade(inv.name);
-    setInv({ name: "", company: "", email: "", phone: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
-    setIdFile(null); setSelfieFile(null);
+    setInv({ name: "", company: "", host: HOSTS[0], purpose: PURPOSES[0], preup: true });
     setTimeout(() => setMade(null), 4000);
   };
   return (
     <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card>
         <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><CalendarPlus size={18} /> Pre-register a visitor</h2>
-        <p className="text-xs text-slate-500 mb-4">Creates an invite with a QR pass. Then go to the Kiosk tab, tap "Scan QR invite" (or Face / Phone once verified), and check them in with it.</p>
+        <p className="text-xs text-slate-500 mb-4">Creates an invite with a QR pass. Then go to the Kiosk tab, tap "Scan QR invite", and check them in with it.</p>
         <div className="space-y-3">
           <input value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} placeholder="Visitor full name" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
           <input value={inv.company} onChange={(e) => setInv({ ...inv, company: e.target.value })} placeholder="Company (optional)" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
           <div className="grid grid-cols-2 gap-3">
-            <input value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="Email (optional)" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
-            <input value={inv.phone} onChange={(e) => setInv({ ...inv, phone: e.target.value })} placeholder="Phone (for Phone/OTP check-in)" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" style={mono} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <select value={inv.host} onChange={(e) => setInv({ ...inv, host: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{HOSTS.map((h) => <option key={h}>{h}</option>)}</select>
             <select value={inv.purpose} onChange={(e) => setInv({ ...inv, purpose: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500">{PURPOSES.map((p) => <option key={p}>{p}</option>)}</select>
           </div>
-          <button type="button" onClick={() => setInv({ ...inv, preup: !inv.preup })} className="flex items-center gap-2 text-xs text-slate-500 text-left">
-            <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${inv.preup ? "bg-violet-500 border-violet-500" : "border-slate-300 bg-white"}`}>
-              {inv.preup && <CheckCircle2 size={12} className="text-white" strokeWidth={3} />}
-            </span>
-            Ask visitor to pre-upload ID + selfie for faster arrival
-          </button>
-          {inv.preup && (
-            <div className="border border-violet-200 bg-violet-50 rounded-lg p-3 space-y-2">
-              <p className="text-xs text-violet-800 flex items-center gap-1.5"><ScanFace size={13} className="shrink-0" /> If they arrive without uploading, the kiosk will ask them to scan their ID and face on the spot before requesting your approval.</p>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="flex flex-col items-center gap-1 border border-dashed border-violet-300 rounded-lg py-3 px-2 bg-white hover:bg-violet-50 cursor-pointer text-center">
-                  <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => setIdFile(e.target.files[0] ? { name: e.target.files[0].name } : null)} />
-                  {idFile ? (
-                    <><CheckCircle2 size={16} className="text-emerald-600" /><span className="text-xs text-emerald-700 truncate max-w-full">{idFile.name}</span></>
-                  ) : (
-                    <><CreditCard size={16} className="text-violet-500" /><span className="text-xs text-slate-500">Upload ID document</span></>
-                  )}
-                </label>
-                <label className="flex flex-col items-center gap-1 border border-dashed border-violet-300 rounded-lg py-3 px-2 bg-white hover:bg-violet-50 cursor-pointer text-center">
-                  <input type="file" accept="image/*" className="hidden" onChange={(e) => setSelfieFile(e.target.files[0] ? { name: e.target.files[0].name } : null)} />
-                  {selfieFile ? (
-                    <><CheckCircle2 size={16} className="text-emerald-600" /><span className="text-xs text-emerald-700 truncate max-w-full">{selfieFile.name}</span></>
-                  ) : (
-                    <><ScanFace size={16} className="text-violet-500" /><span className="text-xs text-slate-500">Upload selfie</span></>
-                  )}
-                </label>
-              </div>
-              <p className="text-xs text-slate-500">
-                {bothUploaded
-                  ? <span className="text-emerald-700 flex items-center gap-1"><CheckCircle2 size={12} /> Both received — the kiosk will just need a quick face match on arrival, not a full ID scan.</span>
-                  : "Optional here — the visitor can also upload these themselves before arriving. Leave blank and the kiosk will collect them on arrival instead."}
-              </p>
-            </div>
-          )}
+          <label className="flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" checked={inv.preup} onChange={(e) => setInv({ ...inv, preup: e.target.checked })} /> Ask visitor to pre-upload ID + selfie for faster arrival</label>
           <button onClick={make} className="w-full bg-violet-500 text-white text-sm rounded-lg py-2.5 hover:bg-violet-600">Send invite with QR pass</button>
           {made && <p className="text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 size={14} /> Invite sent to {made} — now try it at the Kiosk.</p>}
         </div>
@@ -1787,7 +1276,7 @@ const seedUsers = [
 ];
 const ROLES = ["Front desk", "Security officer", "Security admin", "Compliance manager", "IT admin"];
 
-function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping, siteMode, setSiteMode, siteName, setSiteName }) {
+function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping }) {
   const [sub, setSub] = useState("policies");
   const subs = [
     ["policies", "Watchlist & zones", Eye],
@@ -1797,7 +1286,6 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping, siteM
     ["integrations", "Integrations", Globe],
     ["types", "Visitor types", Users],
     ["reports", "Reports", BarChart3],
-    ["sites", "Sites & security", Building2],
   ];
   return (
     <div className="space-y-4">
@@ -1816,47 +1304,7 @@ function Admin({ watchlist, setWatchlist, audit, visitors, logAudit, ping, siteM
       {sub === "integrations" && <AdminIntegrations logAudit={logAudit} ping={ping} />}
       {sub === "types" && <AdminVisitorTypes logAudit={logAudit} ping={ping} />}
       {sub === "reports" && <AdminReports visitors={visitors} ping={ping} logAudit={logAudit} />}
-      {sub === "sites" && <AdminSites siteMode={siteMode} setSiteMode={setSiteMode} siteName={siteName} setSiteName={setSiteName} logAudit={logAudit} ping={ping} />}
     </div>
-  );
-}
-
-/* --- Sites & security workflow --- */
-function AdminSites({ siteMode, setSiteMode, siteName, setSiteName, logAudit, ping }) {
-  const SITES = [
-    { name: "Corporate HQ", mode: "manual", desc: "Standard office lobby. Single host approval; walk-ins go straight to approval after NDA + photo." },
-    { name: "High Security Checkpoint", mode: "secure", desc: "High-security checkpoint. Walk-ins get an extra biometric re-check, and every check-in needs both host AND security sign-off." },
-  ];
-  const selectSite = (s) => {
-    setSiteName(s.name); setSiteMode(s.mode);
-    logAudit("Admin", "Site profile changed", `Active site set to ${s.name} · ${s.mode} workflow`);
-    ping(`Active site: ${s.name} (${s.mode} workflow) — this now applies at the Kiosk and Reception`);
-  };
-  return (
-    <Card>
-      <h2 className="text-lg font-semibold text-slate-800 mb-1 flex items-center gap-2"><Building2 size={18} /> Sites & security workflow</h2>
-      <p className="text-xs text-slate-500 mb-4">Different locations need different rigor. Pick which profile is active for this kiosk/reception right now — the change applies immediately, everywhere in the prototype.</p>
-      <div className="space-y-3">
-        {SITES.map((s) => (
-          <button key={s.name} onClick={() => selectSite(s)}
-            className={`w-full text-left border rounded-xl p-3 transition-colors ${siteName === s.name ? "border-violet-400 bg-violet-50" : "border-slate-200 hover:bg-slate-50"}`}>
-            <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-              <p className="text-sm font-medium">{s.name}</p>
-              <div className="flex items-center gap-2">
-                <Pill tone={s.mode === "secure" ? "red" : "gray"}>{s.mode === "secure" ? "Secure workflow" : "Manual workflow"}</Pill>
-                {siteName === s.name && <Pill tone="purple">Active</Pill>}
-              </div>
-            </div>
-            <p className="text-xs text-slate-500">{s.desc}</p>
-          </button>
-        ))}
-      </div>
-      <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
-        <p className="font-medium text-slate-700 mb-1">What changes between the two workflows</p>
-        <p><span className="font-medium">Manual:</span> walk-in and reception-registered visitors need one host approval, same as today.</p>
-        <p><span className="font-medium">Secure:</span> walk-ins get a mandatory biometric re-verification step at the kiosk, and every non-invited check-in needs both the host <span className="font-medium">and</span> a security officer (Security tab → "Secure-site sign-off") to approve before a badge prints.</p>
-      </div>
-    </Card>
   );
 }
 
@@ -2204,11 +1652,11 @@ function AdminPolicies({ watchlist, setWatchlist, logAudit }) {
         <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-4 text-xs text-slate-600 space-y-1">
           <p className="font-medium text-violet-800">Try it — how the flow works:</p>
           <p><span className="font-medium">1.</span> Add a name below (or use "Victor Crane", already listed).</p>
-          <p><span className="font-medium">2.</span> Go to <span className="font-medium">Reception</span> → "Register visitor" → register that name (any host/purpose) to get a check-in code.</p>
-          <p><span className="font-medium">3.</span> Scan that code at the Kiosk — it gets held ("see reception"), no badge issued, even though the code path is normally instant.</p>
+          <p><span className="font-medium">2.</span> Go to the <span className="font-medium">Kiosk</span> tab → "Walk-in visitor" → enter that exact name.</p>
+          <p><span className="font-medium">3.</span> The kiosk holds them ("see reception") — no badge is issued.</p>
           <p><span className="font-medium">4.</span> Open the <span className="font-medium">Security</span> tab → red "Security review queue" → Approve or Reject.</p>
           <p><span className="font-medium">5.</span> Check <span className="font-medium">Audit log</span> — every step was recorded.</p>
-          <p className="pt-1 border-t border-violet-200 mt-1"><span className="font-medium">Also try:</span> register "Ravi Verma" with purpose "Contractor work" at Reception, then check in with his code — his permit-to-work has expired (see Contractor compliance below), so it gets held the same way, for a different reason.</p>
+          <p className="pt-1 border-t border-violet-200 mt-1"><span className="font-medium">Also try:</span> walk-in as "Ravi Verma" with purpose "Contractor work" — his permit-to-work has expired (see Contractor compliance below), so the kiosk blocks the badge the same way, for a different reason.</p>
         </div>
         <div className="flex gap-2 mb-4">
           <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Full name" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500" />
