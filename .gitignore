@@ -2,6 +2,7 @@
 services/core-api/.venv/
 services/core-api/__pycache__/
 services/core-api/**/__pycache__/
+services/core-api/*.egg-info/
 *.pyc
 
 # Node
