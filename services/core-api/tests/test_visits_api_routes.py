@@ -41,7 +41,7 @@ def idp():
 
 @pytest.fixture(autouse=True)
 def override_dependencies(idp, _migrated_schema):
-    provider = StaticJWKSProvider({(idp.issuer, idp.kid): idp.public_key_pem})
+    provider = StaticJWKSProvider({idp.kid: idp.public_key_pem})
     validator = EntraTokenValidator(jwks_provider=provider, audience=AUDIENCE)
 
     app.dependency_overrides[get_session] = _override_get_session

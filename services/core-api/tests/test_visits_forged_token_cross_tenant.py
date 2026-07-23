@@ -66,11 +66,13 @@ def forged_idp():
 
 @pytest.fixture(autouse=True)
 def override_dependencies(trusted_idp, _migrated_schema):
-    # Only trusted_idp's (issuer, kid) is registered -- forged_idp's
-    # signature can never verify against this validator, exactly mirroring
-    # how a real HttpJWKSProvider would never trust an issuer/key it hasn't
-    # fetched/cached.
-    provider = StaticJWKSProvider({(trusted_idp.issuer, trusted_idp.kid): trusted_idp.public_key_pem})
+    # Only trusted_idp's kid is registered -- forged_idp's signature can
+    # never verify against this validator, exactly mirroring how a real
+    # HttpJWKSProvider would never trust a key it hasn't fetched/cached.
+    # Issuer-pinning itself is proven by EntraTokenValidator.validate()'s own
+    # issuer=expected_issuer check (US-10 B1 remediation), not by this
+    # test double's key lookup -- see StaticJWKSProvider's docstring.
+    provider = StaticJWKSProvider({trusted_idp.kid: trusted_idp.public_key_pem})
     validator = EntraTokenValidator(jwks_provider=provider, audience=AUDIENCE)
     app.dependency_overrides[get_session] = _override_get_session
     app.dependency_overrides[get_token_validator] = lambda: validator
