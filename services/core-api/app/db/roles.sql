@@ -42,3 +42,14 @@ $$;
 -- schema objects created by migrations; it never creates its own.
 GRANT USAGE ON SCHEMA public TO vms_app;
 GRANT USAGE, CREATE ON SCHEMA public TO vms_migrator;
+
+-- vms_migrator also needs CREATE on the database itself (not just the
+-- public schema) so that test fixtures can create/drop disposable scratch
+-- schemas without needing superuser. `GRANT ... ON DATABASE` requires a
+-- literal identifier, so this is done dynamically against whichever
+-- database roles.sql is applied to.
+DO $$
+BEGIN
+    EXECUTE format('GRANT CREATE ON DATABASE %I TO vms_migrator', current_database());
+END
+$$;

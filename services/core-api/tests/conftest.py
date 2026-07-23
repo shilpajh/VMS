@@ -22,6 +22,12 @@ SUPERUSER_DSN = "postgresql://vms:dev-only-not-for-real-secrets@localhost:5432/v
 APP_DSN = "postgresql://vms_app:dev-only-not-for-real-secrets@localhost:5432/vms_test"
 MIGRATOR_DSN = "postgresql://vms_migrator:dev-only-not-for-real-secrets@localhost:5432/vms_test"
 
+# Async (asyncpg) variants for the app's real runtime session layer.
+APP_ASYNC_DSN = "postgresql+asyncpg://vms_app:dev-only-not-for-real-secrets@localhost:5432/vms_test"
+MIGRATOR_ASYNC_DSN = (
+    "postgresql+asyncpg://vms_migrator:dev-only-not-for-real-secrets@localhost:5432/vms_test"
+)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _provisioned_db_roles() -> None:
