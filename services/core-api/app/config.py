@@ -16,5 +16,11 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://localhost:6379/0"
 
+    # This API's Entra App ID / App ID URI. Bearer tokens whose `aud` claim
+    # doesn't exactly match this are rejected (ADR-001 §5) -- placeholder
+    # for local dev, never a real Entra registration; production value comes
+    # from Key Vault / app configuration, never checked in.
+    entra_api_audience: str = "api://smart-vms-core-api-dev-placeholder"
+
 
 settings = Settings()
