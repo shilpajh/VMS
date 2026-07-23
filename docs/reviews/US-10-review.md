@@ -56,4 +56,39 @@ Relevant files:
 
 ## Track 2 — Broader test suite (qa-automation-engineer)
 
-*Pending — running in parallel, will be appended when it lands.*
+Independent re-run: backend 65/65, frontend 8/8, both re-confirmed live (not taken on faith from `docs/loops/US-10-state.md`).
+
+### Criterion → Test → Result → Evidence
+
+1. **State-machine transitions** — N/A, no visit-state-machine surface in this story.
+2. **Tenant-isolation attempts** — **gap found and closed.** Only `GET /tenants/{id}/users` had a cross-tenant test; writes (POST/PATCH/DELETE) and role-assignment were untested at the API layer, including the plan's explicit "403 not 404" rule. Added `tests/test_tenant_isolation_cross_tenant_writes.py` (6 tests, incl. the subtler "own-tenant path, other-tenant's user_id" case) — **6/6 passed against unmodified app code.**
+3. **Command idempotency** — N/A, no async physical commands in this story.
+4. **Outage/replay reconciliation** — N/A, no edge/offline path touched.
+5. **Audit-event presence** — **gap found and closed.** `user.enabled`/`role.revoked` only had generic row-count assertions (not full-shape, not via the real call path); `tenant.created` was missing `reason`/`correlation_id`/timestamp assertions. Added `tests/test_audit_events_full_shape_gap_fill.py` (3 tests, exercising the real PATCH/DELETE/bootstrap call paths) — **3/3 passed against unmodified app code.** All six event types now have a passing full-shape test.
+6. **E2E against device simulators** — N/A, no kiosk/visitor/device surface in this story.
+7. **Load/performance** — NOT TESTABLE against a real PRD threshold (none map to SSO/RBAC, no PRD exists). Informational measurement only: `GET /me` full-stack p50 33.13 ms / p95 34.92 ms (50 calls, 5-call warmup); `has_permission()` direct-call p50 0.56 ms / p95 0.64 ms.
+8. **Accessibility (WCAG 2.1 AA)** — PASS on all checked criteria: native `<button>` (keyboard-operable), `role="status"`/`role="alert"` present and exercised by tests, all four states distinguishable by text content independent of color/role.
+9. **Localization completeness** — checked: no hardcoded strings (all via `t()`). NOT TESTABLE: true multi-locale completeness — no second locale file exists in the repo to diff against.
+10. **72-hour erasure SLA** — NOT TESTABLE / explicitly deferred to US-07; no purge code exists yet to test.
+11. **Avatar-jailbreak resistance** — N/A, no conversational kiosk avatar in this story.
+12. **Resilience (network-loss/reconnect)** — N/A, no edge connector/offline kiosk path touched.
+
+### Additional gap found (escalated, not fixed by QA)
+The plan's file map (Part C) names `packages/contracts/openapi/identity.yaml` as a required new checked-in contract file per `.claude/rules/contracts.md`. **It was never produced** — only the live FastAPI-runtime schema exists. Captured as an intentionally-failing test, `tests/test_openapi_contract_file.py::test_identity_openapi_contract_file_exists` (**FAILS by design**), rather than being created by the QA pass — this is an execution-phase deliverable, not QA's to produce.
+
+### Overall verdict
+Every testable acceptance criterion from the plan's Gherkin scenarios and Definition of Done passes, after closing two real coverage gaps (both confirmed the existing app code was already correct — only the executable evidence was missing). One real gap remains **open, escalated to the execute-story remediation cycle**: the missing OpenAPI contract file. Current suite state: **74 passed, 1 failed (intentional, documents the contract-file gap), 1 skipped (dependent on it)**.
+
+---
+
+## Combined /verify-story disposition
+
+**Blocking (must remediate before merge):**
+1. B1 — Entra token forgery / cross-tenant impersonation (security-privacy-reviewer, Track 1).
+2. Missing `packages/contracts/openapi/identity.yaml` deliverable (qa-automation-engineer, Track 2) — plan-mandated, currently has a failing test as its verifier.
+
+**Should-fix (non-blocking, track but don't need to hold the merge):**
+- `SET LOCAL` bind-param hardening (defense-in-depth; provenance is currently safe).
+- US-07 retention/purge registration + real DPDP sign-off — requires a human compliance owner, cannot be resolved inside this story.
+
+**Result: 2 Blocking findings → returns to `/execute-story` for remediation (cycle 1 of max 2).**
