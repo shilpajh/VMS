@@ -25,12 +25,19 @@ this purgeable row, never verbatim in the append-only `audit_events` table
 (US-11 review, Should-fix #2; see app/domain/visits/service.py).
 
 `submission_dedup_key` backs the public portal's tenant-scoped
-`Idempotency-Key` dedup (US-11 review, Should-fix #1): a SHA-256 hash of
-submission content (contact_value + host_hint), not the raw client-supplied
-header value, so a guessed/reused key can never return an unrelated
-submission's reference. NULL for submissions made without an
-`Idempotency-Key` header (multiple NULLs are permitted by a unique index --
-standard Postgres semantics).
+`Idempotency-Key` dedup. Originally (US-11 review, Should-fix #1) a SHA-256
+hash of submission content alone (contact_value + host_hint) -- but
+`/verify-story` (Track 2, item 3) proved that content-only hashing let an
+attacker who guesses a victim's contact_value+host_hint supply their OWN
+arbitrary Idempotency-Key and still retrieve the victim's real
+tracking_reference, since the header's actual value was never checked, only
+its presence. Fixed in the US-11 remediation cycle: the hash is now a
+SHA-256 of the client's ACTUAL Idempotency-Key header value combined with
+submission content (see `app/api/portal.py::_submission_dedup_key`), so a
+resubmission only dedups when both the same key value AND the same content
+are supplied -- guessing content alone is no longer sufficient. NULL for
+submissions made without an `Idempotency-Key` header (multiple NULLs are
+permitted by a unique index -- standard Postgres semantics).
 """
 
 from __future__ import annotations

@@ -238,9 +238,16 @@ def test_idempotency_key_dedup_returns_same_tracking_reference(client) -> None:
 def test_idempotency_key_dedup_is_content_hashed_not_raw_client_key(client) -> None:
     """The SAME literal Idempotency-Key header value, reused across two
     DIFFERENT submissions (different contact_value/host_hint), must NOT
-    dedup them together -- proving the dedup key is derived from submission
-    content, not trusted directly from the client-supplied header value
-    (US-11 review, Should-fix #1)."""
+    dedup them together -- proving submission content is genuinely part of
+    the dedup key, not ignored in favor of the raw header value alone.
+
+    (US-11 review, Should-fix #1, as refined by the verify-story
+    remediation: the dedup key is now bound to BOTH the client's actual
+    Idempotency-Key header value AND submission content -- see
+    `app/api/portal.py::_submission_dedup_key`. This test's name predates
+    that refinement and originally documented content-hashing as the ONLY
+    factor; it still holds because content continuing to matter is a
+    necessary subset of the current two-factor binding.)"""
     tenant_id = insert_tenant("Acme", f"acme-entra-tid-{uuid.uuid4().hex[:8]}")
     slug = f"acme-{uuid.uuid4().hex[:8]}"
     _set_public_slug(tenant_id, slug)

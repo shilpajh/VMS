@@ -127,3 +127,21 @@ Independent re-run: **185 passed, 1 failed (pre-existing US-10 gap, unrelated), 
 - `CHECKIN_CODE_VALIDITY` hardcoded rather than configurable — minor, not a DoD defect.
 
 **Result: 2 Blocking findings → returns to `/execute-story` for remediation (cycle 1 of max 2).**
+
+---
+
+## Remediation cycle 1 — dedup cross-actor leak (Blocking item 2) fixed
+
+**Branch:** `feature/US-11`. **Scope:** this remediation addresses only Blocking item 2 (the public portal `Idempotency-Key` dedup cross-actor tracking-reference leak). Blocking item 1 (B1, the inherited US-10 auth-bypass merge/ship gate) is explicitly **not** addressed here — it is out of scope for this fix and remains open pending US-10's own remediation; this branch still may not merge to a release branch or deploy until US-10 B1 is resolved.
+
+**Fix applied:** `app/api/portal.py::_submission_dedup_key` now derives the dedup key as `sha256(idempotency_key + "\x1f" + contact_value + "\x1f" + host_hint)` — bound to the client's ACTUAL `Idempotency-Key` header value in addition to submission content, rather than content alone. The call site only computes/checks the dedup key when a header is actually present (`if idempotency_key:` → `dedup_key = ... if idempotency_key else None`), preserving the existing "no header, never dedups" behavior. Tenant scoping (post-`SET LOCAL`, `Visit.tenant_id == tenant.id`) is unchanged.
+
+**Files changed:**
+- `services/core-api/app/api/portal.py` — `_submission_dedup_key` signature and hash material; call site; docstring.
+- `services/core-api/app/models/visit.py` — `submission_dedup_key` column docstring updated to describe the two-factor binding (column type/constraint unchanged, no migration).
+- `services/core-api/tests/test_portal_dedup_cross_actor_leak.py` → renamed to `services/core-api/tests/test_portal_dedup_bound_to_client_key.py`; the exploit-proving assertion is inverted to a fix-proving assertion (attacker's differing key now produces a distinct `tracking_reference`, confirmed via a distinct-row count too); a same-key/same-content sanity test added; the exploit narrative preserved in the module docstring.
+- `services/core-api/tests/test_portal_submission.py` — docstring-only clarification on `test_idempotency_key_dedup_is_content_hashed_not_raw_client_key` to reflect the two-factor binding; no assertion changes; all four existing dedup tests (same-key-same-content dedups, same-key-different-content doesn't, per-tenant scoping, no-header-never-dedups) pass unmodified in behavior.
+
+**Migration:** none required. `submission_dedup_key` remains `String(64)` with the existing `uq_visits_tenant_dedup_key` unique constraint on `(tenant_id, submission_dedup_key)` — only the Python-side hash input changed, not the column type, nullability, or constraint shape.
+
+**Verification:** the renamed exploit test, inverted, now demonstrates the attacker's forged-key resubmission creates a separate visit with a distinct `tracking_reference` (previously it demonstrated the leak and passed). Full test suite re-run confirms no regression (see commit for exact pass count). Independent re-verification (a fresh `/verify-story` pass, not self-assessment by the implementing agent) is still required before this finding can be considered closed, per this project's verifier-first policy — this section records that the fix was applied and locally verified, not that it has been independently re-reviewed.

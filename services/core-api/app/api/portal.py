@@ -8,7 +8,9 @@
   2. Rate limit check (per-IP + per-tenant-slug, keyed on the raw path
      slug string -- no tenant DB lookup needed yet).
   3. Tenant resolution (`SET LOCAL app.current_tenant_id`).
-  4. Idempotency-Key dedup check (tenant-scoped, post-GUC, content-hashed).
+  4. Idempotency-Key dedup check (tenant-scoped, post-GUC, bound to BOTH the
+     client's actual header value AND submission content -- see
+     `_submission_dedup_key`'s docstring; US-11 verify-story remediation).
   5. Privacy-notice-acknowledgment required (422 if false/missing).
   6. Create the Requested visit (host resolution by exact match; unresolved
      -> host_user_id stays NULL).
@@ -46,11 +48,27 @@ VISIT_REQUESTED_REASON = "portal_submission"
 PORTAL_ACTOR = "portal"
 
 
-def _submission_dedup_key(contact_value: str, host_hint: str | None) -> str:
-    # Content-hashed, NOT the raw client-supplied Idempotency-Key header --
-    # so a guessed/reused header value can never return an unrelated
-    # submission's tracking reference (US-11 review, Should-fix #1).
-    material = f"{contact_value}\x1f{host_hint or ''}"
+def _submission_dedup_key(idempotency_key: str, contact_value: str, host_hint: str | None) -> str:
+    # Bound to BOTH the client's actual Idempotency-Key header value AND
+    # submission content (US-11 verify-story remediation, Track 2 item 3).
+    #
+    # Content-hashed alone (the original US-11 review, Should-fix #1
+    # mitigation) is NOT sufficient: it makes the header's *value*
+    # irrelevant and the *content* the entire secret. contact_value and
+    # host_hint are frequently guessable/enumerable (e.g. a corporate email
+    # in a predictable format, a host's name from a LinkedIn post), so an
+    # attacker who reproduces the victim's content -- with an arbitrary
+    # Idempotency-Key of their own choosing, never the victim's real one --
+    # could fish out the victim's real tracking_reference
+    # (test_portal_dedup_cross_actor_leak.py demonstrated this live, not
+    # theoretically).
+    #
+    # Binding the hash to the actual header value closes this: a resubmission
+    # only dedups if the client supplies the SAME key AND the SAME content.
+    # An attacker who doesn't know the victim's real Idempotency-Key value
+    # cannot produce a matching hash no matter how well they guess the
+    # content.
+    material = f"{idempotency_key}\x1f{contact_value}\x1f{host_hint or ''}"
     return hashlib.sha256(material.encode()).hexdigest()
 
 
@@ -103,9 +121,14 @@ async def submit_portal_visit_request(
     # 3. Tenant resolution -- SET LOCAL before any tenant-scoped query.
     tenant = await resolve_public_tenant(tenant_slug, session=session)
 
-    # 4. Idempotency-Key dedup -- tenant-scoped (post-GUC), content-hashed.
-    dedup_key = _submission_dedup_key(body.contact_value, body.host_hint)
-    if idempotency_key:
+    # 4. Idempotency-Key dedup -- tenant-scoped (post-GUC), bound to BOTH the
+    # actual client-supplied header value and submission content.
+    dedup_key = (
+        _submission_dedup_key(idempotency_key, body.contact_value, body.host_hint)
+        if idempotency_key
+        else None
+    )
+    if dedup_key is not None:
         existing = (
             await session.execute(
                 select(Visit).where(
@@ -138,7 +161,7 @@ async def submit_portal_visit_request(
         host_user_id=host_user_id,
         privacy_notice_acknowledged=True,
         privacy_notice_version=body.privacy_notice_version,
-        submission_dedup_key=dedup_key if idempotency_key else None,
+        submission_dedup_key=dedup_key,
         correlation_id=correlation_id,
     )
     await assign_unique_tracking_reference(session, visit)
