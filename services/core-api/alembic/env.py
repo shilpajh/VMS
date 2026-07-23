@@ -4,14 +4,25 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.config import settings
+from app.models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("+asyncpg", ""))
+# Migrations always run under the separate BYPASSRLS `vms_migrator` role
+# (ADR-001 §1/N3) — never the request-path `vms_app` role, never a
+# superuser. `migrations_database_url` is already a sync (psycopg2) URL.
+#
+# Callers driving Alembic programmatically (e.g. test fixtures pointing at a
+# disposable scratch database) may already have set `sqlalchemy.url` on the
+# Config object before invoking us — respect that override instead of
+# clobbering it with the process-wide settings default, which is what makes
+# per-test-database migrations possible at all.
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", settings.migrations_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

@@ -53,3 +53,10 @@ BEGIN
     EXECUTE format('GRANT CREATE ON DATABASE %I TO vms_migrator', current_database());
 END
 $$;
+
+-- Day-0 bootstrap created `alembic_version` while connected as the `vms`
+-- superuser (before vms_migrator existed). Hand ownership to vms_migrator
+-- so it -- not the superuser -- is the role that tracks migration state
+-- going forward, matching every other environment where vms_migrator runs
+-- first. No-op if the table doesn't exist yet (e.g. a fresh database).
+ALTER TABLE IF EXISTS alembic_version OWNER TO vms_migrator;
