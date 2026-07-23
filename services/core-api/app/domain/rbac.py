@@ -18,8 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Permission, Role, RolePermission, UserRole
 
 # Bumped whenever the role_permissions seed changes (a migration). Recorded
-# on role-assignment audit events (ADR-001 §3).
-PERMISSION_POLICY_VERSION = "v1"
+# on role-assignment audit events (ADR-001 §3). Bumped to "v2" by US-11's
+# 0002_visits_and_outbox migration, which adds the `view_visits` permission
+# and grants it to reception_security/tenant_admin -- this is the LIVE
+# policy version any code written from this point on should reference; it
+# is also, per visit-lifecycle.yaml, the same policy_version recorded on
+# visit.registered/visit.denied audit events, since both host transitions
+# are gated by a permission (approve_deny_visits) resolved under this
+# policy (see app/domain/visits/service.py).
+PERMISSION_POLICY_VERSION = "v2"
 
 
 async def get_user_permissions(

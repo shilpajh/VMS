@@ -32,6 +32,15 @@ class Tenant(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     entra_tenant_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # US-11: the public, non-enumerable-by-design handle used to route the
+    # unauthenticated portal URL (POST /public/portal/{tenant_slug}/...).
+    # Lives here (tenant-global `tenants`, not a tenant-scoped table) because
+    # it is a per-tenant attribute of the isolation root itself, exactly like
+    # `entra_tenant_id` -- RLS is not applicable to this table (ADR-001 §2).
+    # Nullable because existing/legacy tenants (or ones not yet given a
+    # public portal) may have none; unique so a slug can never resolve to
+    # more than one tenant.
+    public_slug: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", server_default="active"
     )

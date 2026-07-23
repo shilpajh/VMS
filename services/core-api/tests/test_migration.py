@@ -76,10 +76,17 @@ def test_upgrade_head_creates_expected_tables(scratch_database: str) -> None:
 
 
 def test_downgrade_then_upgrade_is_clean(scratch_database: str) -> None:
+    """Full teardown (head -> base) must remove every 0001 table. Since
+    US-11's 0002_visits_and_outbox is now also on this chain, "-1" from head
+    only reverses 0002 (see tests/test_migration_0002.py for that
+    incremental case) -- this test's own intent is "downgrading all the way
+    is clean", so it now targets "base" explicitly rather than relying on
+    "-1" meaning "the only migration", an assumption that stopped holding
+    once a second migration was added."""
     cfg = alembic_config(_migrator_dsn(scratch_database))
     command.upgrade(cfg, "head")
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "base")
     tables_after_downgrade = _table_names(scratch_database)
     assert not (EXPECTED_TABLES & tables_after_downgrade)
 

@@ -14,9 +14,12 @@ from app.domain.rbac import get_user_permissions, has_permission
 from tests.conftest import assign_role, insert_tenant, insert_user, set_tenant_context
 
 SEED_MATRIX = {
-    "tenant_admin": {"manage_users", "manage_roles", "view_dashboards"},
+    # `view_visits` added by US-11's 0002_visits_and_outbox migration
+    # (permission policy version "v1" -> "v2") -- additive extension of the
+    # existing RBAC test pattern, not a redesign of US-10's model.
+    "tenant_admin": {"manage_users", "manage_roles", "view_dashboards", "view_visits"},
     "host": {"approve_deny_visits"},
-    "reception_security": {"approve_deny_holds", "checkin_confirm"},
+    "reception_security": {"approve_deny_holds", "checkin_confirm", "view_visits"},
     "dashboard_viewer": {"view_dashboards"},
 }
 
