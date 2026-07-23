@@ -36,6 +36,18 @@ async def get_user_permissions(
     return {row[0] for row in result.all()}
 
 
+async def get_user_role_codes(
+    session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> set[str]:
+    stmt = (
+        select(Role.code)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.tenant_id == tenant_id, UserRole.user_id == user_id)
+    )
+    result = await session.execute(stmt)
+    return {row[0] for row in result.all()}
+
+
 async def has_permission(
     session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, permission_code: str
 ) -> bool:
