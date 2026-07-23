@@ -1,0 +1,96 @@
+asyncapi: "3.0.0"
+info:
+  title: Smart VMS - visit.checkin_code.dispatch (US-11, ADR-002 §3)
+  version: "1"
+  description: >
+    Notification-dispatch intent written by the Visitor & Visits domain
+    inside the same transaction as the Requested->Registered transition
+    (ADR-002 §1). Relayed by a (not-yet-built, out of scope for US-11)
+    Integration worker, which MUST apply the staleness/expiry send-gate
+    (§4 below) before dispatching and MUST NOT log the decrypted payload
+    (never on success, retry, or error -- ADR-002 §5).
+
+    site/device/panel-side expiry fields are deliberately absent -- this is
+    a visitor notification, not a device/panel command; that command
+    family (with tenant, site, device, correlation_id, expiry,
+    idempotency_key per .claude/rules/contracts.md) is a later ADR for the
+    C# edge connector.
+channels:
+  visit.checkin_code.dispatch:
+    address: visit.checkin_code.dispatch
+    messages:
+      VisitCheckinCodeDispatch:
+        $ref: "#/components/messages/VisitCheckinCodeDispatch"
+operations:
+  publishVisitCheckinCodeDispatch:
+    action: send
+    channel:
+      $ref: "#/channels/visit.checkin_code.dispatch"
+    summary: >
+      Published by the Visitor & Visits domain when a visit transitions
+      Requested -> Registered (host_approval). idempotency_key is
+      deterministic: sha256("visit.checkin_code.dispatch:" + visit_id) --
+      a redelivered message must dispatch the code exactly once.
+components:
+  messages:
+    VisitCheckinCodeDispatch:
+      name: VisitCheckinCodeDispatch
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - schema_version
+          - tenant_id
+          - visit_id
+          - correlation_id
+          - idempotency_key
+          - contact_channel
+          - contact_value
+          - checkin_code
+          - tracking_reference
+        properties:
+          schema_version:
+            type: string
+            const: "1"
+          tenant_id: { type: string, format: uuid }
+          visit_id: { type: string, format: uuid }
+          correlation_id: { type: string, format: uuid }
+          idempotency_key:
+            type: string
+            description: >
+              Deterministic -- sha256("visit.checkin_code.dispatch:" +
+              visit_id). Distinct from the public-submission
+              Idempotency-Key header (a separate, content-hashed,
+              tenant-scoped dedup concern owned by the portal endpoint).
+          contact_channel: { type: string, enum: [email, sms] }
+          contact_value:
+            type: string
+            description: PII -- never logged, at rest only as ciphertext.
+          checkin_code:
+            type: string
+            description: >
+              The plaintext check-in credential (secrets.token_urlsafe(24)).
+              Only its SHA-256 hash is ever persisted on visits.checkin_code_hash;
+              this plaintext exists only transiently and inside this
+              envelope-encrypted payload.
+          tracking_reference:
+            type: string
+            pattern: "^REQ-\\d+$"
+          code_expires_at:
+            type: [string, "null"]
+            format: date-time
+          tenant_display_name:
+            type: string
+x-send-gate:
+  description: >
+    ADR-002 §4 -- before dispatching, the relay worker MUST re-read the
+    source visits row and refuse to send (marking the outbox row `failed`,
+    never `dispatched`) if ANY of:
+      - not_valid_after (the copied code_expires_at) is non-null and in the past;
+      - the visit's current status is no longer Registered;
+      - the visit's checkin_code_hash no longer matches the code implied by
+        this message (a reissued code supersedes an older queued one).
+  never_log: >
+    The relay worker MUST NOT log the decrypted payload -- not on success,
+    not on retry, not on error. Errors log id, tenant_id, message_type,
+    idempotency_key, attempts only.
