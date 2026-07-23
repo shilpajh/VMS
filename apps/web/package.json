@@ -13,11 +13,14 @@
   "dependencies": {
     "@azure/msal-browser": "^5.17.1",
     "@azure/msal-react": "^5.5.3",
+    "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.101.4",
     "i18next": "^26.3.6",
+    "lucide-react": "^1.26.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-i18next": "^17.0.11"
+    "react-i18next": "^17.0.11",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",

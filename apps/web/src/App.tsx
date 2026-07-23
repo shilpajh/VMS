@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { loginRequest } from './auth/msal'
 import { useCurrentUser } from './auth/useCurrentUser'
-import { PortalRequestForm } from './portal/PortalRequestForm'
+import { PortalPage } from './portal/PortalPage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
@@ -101,12 +101,7 @@ function App() {
   })
 
   if (portalTenantSlug) {
-    return (
-      <main>
-        <h1>{t('app.title', 'Smart VMS')}</h1>
-        <PortalRequestForm tenantSlug={portalTenantSlug} />
-      </main>
-    )
+    return <PortalPage tenantSlug={portalTenantSlug} />
   }
 
   return (
