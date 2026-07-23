@@ -86,3 +86,44 @@ US-11's three authenticated host endpoints (`app/api/visits.py` lines 62-67, 87-
 - All loop-state-flagged placeholders/process items (7-day check-in validity, 44-file count, non-TDD task 9) are real and honestly disclosed, none silently accepted; none affect a safety property.
 
 **Disposition:** One Blocking item (B1 — the still-open US-10 merge/ship gate, unchanged, correctly preserved). Three Should-fix items, two requiring a human compliance owner (retention registration, consent framework). US-11's own implementation is otherwise sound and matches the approved plan/ADRs.
+
+---
+
+# /verify-story — Track 2: Broader Test Suite (qa-automation-engineer)
+
+Independent re-run: **185 passed, 1 failed (pre-existing US-10 gap, unrelated), 1 skipped** — 183 confirmed matching the loop-state exactly before QA's own 2 added tests.
+
+### Criterion → Test → Result → Evidence (summary; full detail in the agent's report)
+1. **State-machine transitions** — PASS. Both directions genuinely tested; Gherkin Scenario 5's reconciliation (concrete `approve`-on-non-`Requested` → 409 call, not a literal `CheckedIn` route) implemented exactly as specified.
+2. **Tenant-isolation attempts** — PASS. New public-surface dedup scoping confirmed tenant-scoped; `test_visits_forged_token_cross_tenant.py` (8 tests, two forgery classes × all 3 routes) is a thorough, dedicated proof, not inherited from US-10.
+3. **Command idempotency — REAL GAP FOUND, not fixed by QA.** The outbox `idempotency_key` mechanism (ADR-002 §2) is sound. The **public portal's `Idempotency-Key` dedup has a real cross-actor information-disclosure bug**: `_submission_dedup_key` matches on submission content (`contact_value`+`host_hint`) alone — the client's actual header *value* is never checked, only its presence. A new test, `test_portal_dedup_cross_actor_leak.py::test_attacker_with_a_different_idempotency_key_value_can_still_fish_out_victims_tracking_reference`, **passes and proves the exploit**: an attacker who guesses a victim's `contact_value`+`host_hint` and supplies their own arbitrary `Idempotency-Key` retrieves the victim's real `tracking_reference` — directly through the same submission endpoint's own response, with no separate lookup endpoint needed. This is more immediately exploitable than the design-gate review's original characterization (which assumed a future lookup endpoint would be required to make the reference useful) — the disclosure happens right now, at submission time, via the endpoint this story ships. **Recommend escalating this from Should-fix to Blocking** given it's a proven, live information-disclosure defect, not a theoretical future risk. Fix direction (not applied): bind the dedup match to the actual client-supplied key value (e.g. include it in the hash), not just content.
+4. **Outage/replay reconciliation** — PASS as a contract test (relay worker itself correctly out of scope); `not_valid_after`-matches-`code_expires_at` test exercises the real encryption path with real data, not hollow.
+5. **Audit-event presence** — PASS, all three event types (`visit.requested`/`registered`/`denied`) verified against actual row content, including confirming `visit.denied`'s reason is genuinely coded (not a fragment of the free text).
+6. **E2E device simulators** — N/A, no kiosk/device surface.
+7. **Load/performance** — no PRD threshold applies; informational measurements taken (portal submission p50 34ms/p95 58ms; approval p50 43ms/p95 49ms). **Gap found and closed**: no prior test exercised the real configured rate-limit thresholds end-to-end; new test confirms exactly the configured capacity (10) succeeds before 429, stable across repeated runs. Configured values (`capacity=10`, `refill=5/min` per-IP; `capacity=60`, `refill=60/min` per-tenant) match the plan's suggested numbers.
+8. **Accessibility/Localization** — N/A, backend-only story.
+9. **72-hour erasure SLA** — NOT TESTABLE, placeholders only, no purge job built yet (same as US-10).
+10. **Avatar-jailbreak/resilience** — N/A.
+
+### Additional scrutiny (as directed)
+- The `submission_dedup_key` mechanism's tenant-scoping itself is correctly enforced — the gap is specifically that content alone (not the actual key value) determines the match, inverting the intended protection.
+- Task 9's non-TDD construction: coverage is comprehensive everywhere except exactly the adversarial-perspective gap above — consistent with what non-TDD construction tends to miss (validates stated behavior, not attacker behavior).
+- `CHECKIN_CODE_VALIDITY` placeholder: clearly named and commented; minor note that it's hardcoded rather than in `settings`, not a DoD defect.
+
+**Overall verdict:** Suite substantially passes and independently confirms the loop-state's report. One real, proven security gap found (dedup cross-actor leak) and reported, not fixed. One coverage gap found and closed (rate-limit e2e). No other blocking gaps.
+
+---
+
+## Combined /verify-story disposition
+
+**Blocking (must remediate before merge):**
+1. **B1** — US-10's auth-bypass finding, inherited via `get_current_principal`. Hard merge/ship gate for both branches. Not a US-11 code defect; not fixable inside US-11.
+2. **Dedup cross-actor tracking-reference leak** (elevated from the design-gate review's original Should-fix #1, per QA's demonstration that it's immediately exploitable through the story's own endpoint, not a deferred future risk). Fixable inside US-11's own code: bind the dedup match to the actual client-supplied `Idempotency-Key` value, not content alone.
+
+**Should-fix (non-blocking, track but don't need to hold the merge):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — needs a human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to a specific document, re-consent on version bump) — needs a human compliance owner.
+- `visit.requested` audit omits `policy_version` — defensible (no policy governs an anonymous submission), flag for an explicit product decision.
+- `CHECKIN_CODE_VALIDITY` hardcoded rather than configurable — minor, not a DoD defect.
+
+**Result: 2 Blocking findings → returns to `/execute-story` for remediation (cycle 1 of max 2).**
