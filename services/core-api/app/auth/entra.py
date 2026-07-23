@@ -34,12 +34,17 @@ class TokenValidationError(Exception):
 class ValidatedTokenClaims:
     """Normalized, already-verified claims. `oid` is the canonical subject;
     `sub` is carried only as the documented fallback (ADR-001 §5) — callers
-    must not mix the two without de-duplication."""
+    must not mix the two without de-duplication. `name`/`preferred_username`
+    are carried through (still integrity-protected by the same signature)
+    so JIT provisioning has a real display name/email rather than a
+    fabricated placeholder -- never logged anywhere (both are PII)."""
 
     tid: str
     oid: str | None
     sub: str
     aud: str
+    name: str | None = None
+    preferred_username: str | None = None
 
 
 class JWKSProvider(Protocol):
@@ -145,4 +150,11 @@ class EntraTokenValidator:
         if not oid and not sub:
             raise TokenValidationError("token has neither oid nor sub claim")
 
-        return ValidatedTokenClaims(tid=tid, oid=oid, sub=sub, aud=claims["aud"])
+        return ValidatedTokenClaims(
+            tid=tid,
+            oid=oid,
+            sub=sub,
+            aud=claims["aud"],
+            name=claims.get("name"),
+            preferred_username=claims.get("preferred_username"),
+        )

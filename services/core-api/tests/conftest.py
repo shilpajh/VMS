@@ -8,11 +8,15 @@ real PII — synthetic data only (AGENTS.md).
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
+import psycopg2
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.db.provision_roles import provision_roles
 
@@ -65,3 +69,96 @@ def _migrated_schema(_provisioned_db_roles) -> None:
     this shared vms_test schema.
     """
     command.upgrade(alembic_config(MIGRATOR_DSN), "head")
+
+
+# --- Async session fixture for tests exercising the real request-path DB
+# layer (app.auth.dependencies, app.domain.rbac), always as vms_app against
+# vms_test -- never settings.database_url's default (which points at the
+# dev `vms` database).
+_test_app_engine = create_async_engine(APP_ASYNC_DSN, poolclass=NullPool)
+TestAppSessionLocal = async_sessionmaker(_test_app_engine, expire_on_commit=False)
+
+
+@pytest.fixture()
+async def app_session(_migrated_schema):
+    """Mirrors app.db.session.get_session's one-transaction-per-request
+    shape: everything a test does through this fixture shares one
+    transaction, so a `SET LOCAL app.current_tenant_id` set via
+    get_current_principal stays valid for the rest of the test -- exactly
+    like it does for the rest of a real request."""
+    async with TestAppSessionLocal() as session:
+        yield session
+        await session.rollback()
+
+
+# --- Synchronous BYPASSRLS helpers for seeding fixture data across tenants
+# (mirrors what an ops script / another tenant's admin would do), reused by
+# multiple test modules.
+def insert_tenant(name: str, entra_tenant_id: str, status: str = "active") -> uuid.UUID:
+    tenant_id = uuid.uuid4()
+    conn = psycopg2.connect(MIGRATOR_DSN)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO tenants (id, name, entra_tenant_id, status) VALUES (%s, %s, %s, %s)",
+                (str(tenant_id), name, entra_tenant_id, status),
+            )
+    finally:
+        conn.close()
+    return tenant_id
+
+
+def insert_user(
+    tenant_id: uuid.UUID,
+    external_idp_subject: str,
+    email: str | None = None,
+    display_name: str | None = None,
+    status: str = "active",
+) -> uuid.UUID:
+    user_id = uuid.uuid4()
+    conn = psycopg2.connect(MIGRATOR_DSN)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users "
+                "(id, tenant_id, external_idp_subject, email, display_name, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    str(user_id),
+                    str(tenant_id),
+                    external_idp_subject,
+                    email or f"{external_idp_subject}@example.com",
+                    display_name or external_idp_subject,
+                    status,
+                ),
+            )
+    finally:
+        conn.close()
+    return user_id
+
+
+def set_user_status(user_id: uuid.UUID, status: str) -> None:
+    conn = psycopg2.connect(MIGRATOR_DSN)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET status = %s WHERE id = %s", (status, str(user_id)))
+    finally:
+        conn.close()
+
+
+def assign_role(tenant_id: uuid.UUID, user_id: uuid.UUID, role_code: str) -> None:
+    conn = psycopg2.connect(MIGRATOR_DSN)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM roles WHERE code = %s", (role_code,))
+            (role_id,) = cur.fetchone()
+            cur.execute(
+                "INSERT INTO user_roles (id, tenant_id, user_id, role_id) VALUES (%s, %s, %s, %s)",
+                (str(uuid.uuid4()), str(tenant_id), str(user_id), str(role_id)),
+            )
+    finally:
+        conn.close()
