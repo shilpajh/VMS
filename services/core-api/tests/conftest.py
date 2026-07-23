@@ -149,6 +149,16 @@ def set_user_status(user_id: uuid.UUID, status: str) -> None:
         conn.close()
 
 
+async def set_tenant_context(session, tenant_id: uuid.UUID) -> None:
+    """Test helper mirroring step 2 of ADR-001 §1's request sequence, for
+    tests that exercise RLS-scoped queries directly (not through
+    get_current_principal). tenant_id is always a UUID object we generated
+    ourselves in test setup, never raw user input."""
+    from sqlalchemy import text
+
+    await session.execute(text(f"SET LOCAL app.current_tenant_id = '{tenant_id}'"))
+
+
 def assign_role(tenant_id: uuid.UUID, user_id: uuid.UUID, role_code: str) -> None:
     conn = psycopg2.connect(MIGRATOR_DSN)
     try:
