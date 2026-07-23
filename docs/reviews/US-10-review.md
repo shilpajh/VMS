@@ -92,3 +92,21 @@ Every testable acceptance criterion from the plan's Gherkin scenarios and Defini
 - US-07 retention/purge registration + real DPDP sign-off — requires a human compliance owner, cannot be resolved inside this story.
 
 **Result: 2 Blocking findings → returns to `/execute-story` for remediation (cycle 1 of max 2).**
+
+---
+
+## Remediation — B1 fixed (pending independent re-verification)
+
+**Status:** implemented, cycle 1 of max 2 security-remediation loop. This section is an addendum only; the B1 finding text above is left unchanged as the historical record of what was found.
+
+**What changed:**
+- `app/auth/entra.py`: `EntraTokenValidator.validate()` no longer reads the `iss` claim from the token to decide what to trust. It now takes a required `expected_issuer` parameter supplied by the caller, fetches JWKS keys using that trusted value, and passes it as `issuer=` to `jwt.decode` (closing the former tautology of checking a self-asserted issuer against itself). Added `peek_unverified_tenant_id(token)`, which reads only the still-unverified `tid` claim so a caller can look up a candidate tenant row — never itself trusted for authorization. `StaticJWKSProvider` is now keyed by `kid` alone (documented rationale in its docstring) so tests aren't coupled to production URL-construction details; `HttpJWKSProvider`'s production JWKS-fetch/cache logic is unchanged except that it now always receives a trusted, DB-derived issuer rather than a token-supplied one.
+- `app/auth/dependencies.py`: `get_current_principal` is restructured so tenant resolution now happens in two parts — (0) peek the unverified `tid` to find a candidate tenant row, (1) if found and active, compute `expected_issuer = f"https://login.microsoftonline.com/{tenant.entra_tenant_id}/v2.0"` from that tenant's trusted, DB-stored `entra_tenant_id`, (1b) run full signature+issuer+audience validation against that expected issuer, and only then (with a defense-in-depth check that the verified `tid` matches the resolved tenant) proceed to `SET LOCAL`/JIT-provisioning as before. The existing `aud` check and fail-closed behavior are preserved unchanged.
+- `tests/support/entra_tokens.py`: added `entra_issuer_for(tid)`; `SyntheticIdp.issue_token()` now defaults `iss` to that computed value (matching production's trusted-issuer format) unless a test explicitly overrides it to construct a forged/mismatched issuer.
+- New test file `tests/test_entra_iss_pinning_security.py`: proves the exact B1 exploit (attacker-hosted JWKS, attacker-signed token, `tid`/`oid` set to a real victim tenant/admin, forged `iss`) is rejected with 401; also covers a validly-signed, Microsoft-authority-shaped `iss` for the wrong tenant, and a legitimate-token control case.
+- `tests/test_entra_auth.py`: updated all `validate()` calls to the new signature; added two new unit tests for forged-issuer and wrong-tenant-issuer rejection at the pure validator level.
+- `tests/test_jit_provisioning.py`, `tests/test_api_identity.py`, `tests/test_stateless_revocation.py`, `tests/test_tenant_isolation_cross_tenant_writes.py`, `tests/test_audit_events_full_shape_gap_fill.py`: mechanical update of `StaticJWKSProvider` construction to the new kid-only keying; no behavioral changes to what these tests assert.
+
+**Evidence:** the new exploit test was run and confirmed failing (vulnerability reproduced — forged token wrongly accepted, `pytest.raises(HTTPException)` reported "DID NOT RAISE") against the pre-fix code, then confirmed passing after the fix. Full suite: 79 passed (74 pre-existing + 5 new), 1 pre-existing unrelated failure (missing OpenAPI contract file, tracked separately as Blocking finding 2), 1 skipped — no regressions.
+
+This finding is now resolved pending independent re-verification at the next `/verify-story` pass (security-privacy-reviewer must confirm the fix independently; this remediation was performed by the builder, not by the reviewer).

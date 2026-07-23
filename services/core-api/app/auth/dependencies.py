@@ -1,8 +1,15 @@
 """Tenant resolution + JIT provisioning (US-10, task 6).
 
-Implements the EXACT 3-step request-time sequence from ADR-001 §1, binding:
-  1. Resolve tenant from the validated token's `tid` claim via a lookup on
-     the tenant-global `tenants` table -- no RLS involved.
+Implements the request-time sequence from ADR-001 §1, as revised by the US-10
+B1 security remediation (docs/reviews/US-10-review.md):
+  0. Peek the token's STILL-UNVERIFIED `tid` claim -- used ONLY to look up a
+     candidate tenant row, never trusted for authorization.
+  1. Resolve tenant from that candidate `tid` via a lookup on the
+     tenant-global `tenants` table -- no RLS involved.
+  1b. Compute the EXPECTED issuer from the tenant's TRUSTED, DB-stored
+     `entra_tenant_id` (never from the token's own `iss` claim), then run
+     full signature+issuer+audience validation against it. Only after this
+     succeeds is the token's (now-verified) `tid` trusted.
   2. `SET LOCAL app.current_tenant_id` inside the request transaction.
   3. Only then read/JIT-insert into `users` -- the JIT insert satisfies the
      RLS `WITH CHECK` clause because the GUC is already set at that point.
@@ -27,6 +34,7 @@ from app.auth.entra import (
     EntraTokenValidator,
     HttpJWKSProvider,
     TokenValidationError,
+    peek_unverified_tenant_id,
 )
 from app.config import settings
 from app.db.session import get_session
@@ -72,21 +80,52 @@ async def get_current_principal(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token"
         )
 
+    # --- Step 0 (US-10 B1 remediation): peek the STILL-UNVERIFIED `tid` claim
+    # ONLY to look up a candidate tenant row. This value is never trusted for
+    # authorization -- it is used solely to derive the TRUSTED, DB-stored
+    # `entra_tenant_id` needed to compute the expected issuer/JWKS location
+    # for the real validation that follows. Reading the token's own `iss`
+    # claim and validating it against itself (the pre-fix behavior) is
+    # exactly the tautology that made cross-tenant token forgery possible.
     try:
-        claims = validator.validate(credentials.credentials)
+        candidate_tid = peek_unverified_tenant_id(credentials.credentials)
     except TokenValidationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
         ) from None
 
-    # --- Step 1: resolve tenant from `tid` -- tenants is tenant-global, no RLS.
+    # --- Step 1: resolve tenant from the (still-unverified) `tid` -- tenants
+    # is tenant-global, no RLS. This lookup is safe pre-validation because it
+    # is not itself an authorization decision: it exists only to obtain the
+    # tenant's TRUSTED `entra_tenant_id` for computing the expected issuer.
     tenant = (
-        await session.execute(select(Tenant).where(Tenant.entra_tenant_id == claims.tid))
+        await session.execute(select(Tenant).where(Tenant.entra_tenant_id == candidate_tid))
     ).scalar_one_or_none()
     if tenant is None or tenant.status != "active":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown or suspended tenant"
         )
+
+    # --- Step 1b: compute the EXPECTED issuer from the trusted, DB-stored
+    # entra_tenant_id (never from the token's own `iss` claim), then run full
+    # signature+issuer+audience validation against it. Only a token whose
+    # real `iss` exactly matches this trusted authority for THIS tenant can
+    # pass; JWKS keys are fetched from this same trusted location.
+    expected_issuer = f"https://login.microsoftonline.com/{tenant.entra_tenant_id}/v2.0"
+    try:
+        claims = validator.validate(credentials.credentials, expected_issuer=expected_issuer)
+    except TokenValidationError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+        ) from None
+
+    # Defense-in-depth: the now-VERIFIED `tid` must match the tenant the
+    # expected issuer was computed from. This should always hold given issuer
+    # pinning above, but fail closed on any anomaly rather than assume it.
+    if claims.tid != tenant.entra_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+        ) from None
 
     # --- Step 2: SET LOCAL before ANY scoped read/write (ADR-001 §1).
     # tenant.id came back from our own DB query (a validated UUID object,

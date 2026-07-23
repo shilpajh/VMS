@@ -36,7 +36,7 @@ def idp():
 
 @pytest.fixture()
 def validator(idp):
-    provider = StaticJWKSProvider({(idp.issuer, idp.kid): idp.public_key_pem})
+    provider = StaticJWKSProvider({idp.kid: idp.public_key_pem})
     return EntraTokenValidator(jwks_provider=provider, audience=AUDIENCE)
 
 
