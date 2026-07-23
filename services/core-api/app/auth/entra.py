@@ -10,8 +10,17 @@ policy: never proceed without a vendor credential).
 This module has NO knowledge of Smart VMS's own `tenants`/`users` tables —
 resolving the token's `tid` claim to a tenant row, checking tenant
 suspension, and JIT-provisioning the user all happen one layer up, in
-`app.auth.dependencies` (task 6), per the exact 3-step request-time sequence
-in ADR-001 §1.
+`app.auth.dependencies` (task 6), per the request-time sequence in ADR-001
+§1 (as revised by the US-10 B1 remediation, docs/reviews/US-10-review.md).
+
+US-10 B1 remediation: `EntraTokenValidator.validate()` NO LONGER reads the
+`iss` claim from the token to decide what to trust — that was the root
+cause of the B1 cross-tenant impersonation vulnerability (validating a
+token's self-asserted issuer against itself). The caller now derives
+`expected_issuer` from a trusted source (the DB-stored
+`tenants.entra_tenant_id`) and passes it in; `peek_unverified_tenant_id()`
+below exists ONLY to let the caller find that trusted tenant row in the
+first place, from the still-unverified `tid` claim.
 """
 
 from __future__ import annotations
@@ -55,16 +64,29 @@ class JWKSProvider(Protocol):
 
 
 class StaticJWKSProvider:
-    """A local/preloaded JWKS provider keyed by (issuer, kid) -> PEM public
-    key. This is what tests use, loaded with a locally generated RSA
-    keypair — never a real Entra key."""
+    """A local/preloaded JWKS provider keyed by `kid` -> PEM public key. This
+    is what tests use, loaded with a locally generated RSA keypair — never
+    a real Entra key.
 
-    def __init__(self, keys: dict[tuple[str, str], str]) -> None:
+    Deliberately keyed by `kid` alone, NOT `(issuer, kid)`: in production,
+    `HttpJWKSProvider` fetches keys from a per-tenant URL derived from a
+    TRUSTED, DB-computed `issuer` (US-10 B1 remediation) — the security
+    property that a genuine key can only be found at the genuine tenant's
+    Microsoft-hosted endpoint is a property of that *real network fetch*,
+    not something a same-process static test double can (or needs to)
+    simulate. The `issuer` parameter this protocol method receives is
+    accepted for interface compatibility but intentionally unused here;
+    what actually proves issuer-pinning in tests is
+    `EntraTokenValidator.validate()`'s own `issuer=expected_issuer` check
+    against `jwt.decode`, which this test double does not and must not
+    weaken."""
+
+    def __init__(self, keys: dict[str, str]) -> None:
         self._keys = dict(keys)
 
     def get_public_key(self, issuer: str, kid: str) -> str:
         try:
-            return self._keys[(issuer, kid)]
+            return self._keys[kid]
         except KeyError:
             raise TokenValidationError("unknown signing key for issuer/kid") from None
 
@@ -102,30 +124,62 @@ class HttpJWKSProvider:
         }
 
 
+def peek_unverified_tenant_id(token: str) -> str:
+    """Reads the `tid` claim from the token WITHOUT verifying its signature.
+
+    US-10 B1 remediation: this exists ONLY so a caller (app.auth.dependencies)
+    can look up a CANDIDATE tenant row and derive that tenant's TRUSTED,
+    DB-stored `entra_tenant_id` -- which is then used to compute the expected
+    issuer/JWKS location for real validation. The value returned here must
+    NEVER be used for any authorization decision on its own; it is discarded
+    the moment `EntraTokenValidator.validate()` succeeds, whose returned,
+    fully-VERIFIED `tid` is the only one downstream code may rely on. If the
+    token is malformed, this raises the same `TokenValidationError` a full
+    validation failure would, so callers can map it to a 401 uniformly."""
+    try:
+        unverified_claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError as exc:
+        raise TokenValidationError("malformed token") from exc
+
+    tid = unverified_claims.get("tid")
+    if not tid:
+        raise TokenValidationError("missing required token header/claims")
+    return tid
+
+
 class EntraTokenValidator:
     """Validates an Entra-issued bearer JWT: signature (via the injected
-    `JWKSProvider`), `exp`/`nbf`, and `aud` pinned to this API's configured
-    App ID (ADR-001 §5). Does NOT check `tid` against a stored tenant --
-    that's the caller's job (app.auth.dependencies, task 6)."""
+    `JWKSProvider`), `exp`/`nbf`, `aud` pinned to this API's configured App
+    ID, and -- critically -- `iss` pinned to a caller-supplied
+    `expected_issuer` (ADR-001 §5; US-10 B1 remediation).
+
+    `expected_issuer` MUST be derived by the caller from a TRUSTED source
+    (the DB-stored `tenants.entra_tenant_id`, resolved via the token's
+    still-unverified `tid` claim) -- NEVER from the token's own `iss` claim.
+    Reading `iss` from the token and validating the token's `iss` against
+    itself is exactly the tautology that made B1 exploitable; this method no
+    longer reads `iss` (or `tid`) from unverified claims for that purpose at
+    all. JWKS keys are fetched using `expected_issuer` too, so a token
+    cannot direct this validator to fetch signing keys from an
+    attacker-controlled URL."""
 
     def __init__(self, jwks_provider: JWKSProvider, audience: str) -> None:
         self._jwks_provider = jwks_provider
         self._audience = audience
 
-    def validate(self, token: str) -> ValidatedTokenClaims:
+    def validate(self, token: str, expected_issuer: str) -> ValidatedTokenClaims:
         try:
             header = jwt.get_unverified_header(token)
-            unverified_claims = jwt.decode(token, options={"verify_signature": False})
         except jwt.PyJWTError as exc:
             raise TokenValidationError("malformed token") from exc
 
         kid = header.get("kid")
-        issuer = unverified_claims.get("iss")
-        tid = unverified_claims.get("tid")
-        if not kid or not issuer or not tid:
+        if not kid:
             raise TokenValidationError("missing required token header/claims")
 
-        public_key = self._jwks_provider.get_public_key(issuer, kid)
+        # Keys are fetched from the TRUSTED expected_issuer, never from the
+        # token's own (attacker-controllable) `iss` claim.
+        public_key = self._jwks_provider.get_public_key(expected_issuer, kid)
 
         try:
             claims = jwt.decode(
@@ -133,7 +187,7 @@ class EntraTokenValidator:
                 key=public_key,
                 algorithms=["RS256"],
                 audience=self._audience,
-                issuer=issuer,
+                issuer=expected_issuer,
                 options={"require": ["exp", "nbf", "iat", "aud", "iss"]},
             )
         except jwt.ExpiredSignatureError as exc:
@@ -142,11 +196,16 @@ class EntraTokenValidator:
             raise TokenValidationError("token not yet valid (nbf)") from exc
         except jwt.InvalidAudienceError as exc:
             raise TokenValidationError("invalid audience") from exc
+        except jwt.InvalidIssuerError as exc:
+            raise TokenValidationError("invalid issuer") from exc
         except jwt.PyJWTError as exc:
             raise TokenValidationError("invalid token") from exc
 
+        tid = claims.get("tid")
         oid = claims.get("oid")
         sub = claims.get("sub")
+        if not tid:
+            raise TokenValidationError("missing required token header/claims")
         if not oid and not sub:
             raise TokenValidationError("token has neither oid nor sub claim")
 
