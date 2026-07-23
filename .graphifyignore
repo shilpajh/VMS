@@ -1,0 +1,13 @@
+# Never feed real customer/visitor data, secrets, or biometric samples into
+# graphify's semantic pass (docs/PDFs/images go through an LLM backend).
+# Code and Postgres schema extraction is local-only (tree-sitter, no LLM) and
+# is fine to include.
+.env
+.env.*
+**/secrets/**
+**/*.pem
+**/*.key
+tests/fixtures/real-data/**
+tests/fixtures/biometric-samples/**
+docs/incidents/**
+graphify-out/cost.json

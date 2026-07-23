@@ -1,0 +1,91 @@
+# Smart VMS — Canonical Visit Lifecycle (machine-readable source of truth)
+# Consumers: Python domain transition table, verifier generation, TS/Dart status
+# enums, lifecycle diagram. PRD Section 3.13 is the prose mirror of THIS file;
+# if they disagree, this file wins and the PRD gets a correction ticket.
+version: 1
+states:
+  - Requested          # portal submission, host undecided, visitor not on site
+  - Registered         # host approved, code issued, not arrived
+  - AwaitingApproval   # physically at kiosk/reception, one approver pending
+  - AwaitingDualSignoff # secure visit: host + security both required
+  - Held               # watchlist match or compliance hold; human decision only
+  - CheckedIn          # badge issued, on site
+  - CheckedOut         # visit ended, credential deactivated (terminal)
+  - Denied             # rejected at any stage, no active credential (terminal)
+  - Safe               # accounted for during evacuation (reverts to CheckedIn)
+
+transitions:
+  # --- Portal path ---
+  - { from: Requested, to: Registered, trigger: host_approval,
+      requires_human: true,
+      audit: { event: visit.registered, requires: [actor, reason, correlation_id, policy_version] } }
+  - { from: Requested, to: Denied, trigger: host_denial,
+      requires_human: true,
+      audit: { event: visit.denied, requires: [actor, reason, correlation_id, policy_version] } }
+
+  # --- Pre-registered arrival ---
+  - { from: Registered, to: CheckedIn, trigger: checkin_verified,
+      requires_human: false,   # frictionless QR/biometric happy path
+      guards: [identity_verified, watchlist_clear, within_visit_window],
+      audit: { event: visit.checked_in, requires: [actor, correlation_id, verification_method] } }
+  - { from: Registered, to: Held, trigger: watchlist_match,
+      requires_human: false,   # entering Held is automatic; LEAVING it never is
+      audit: { event: visit.held, requires: [correlation_id, hold_reason, evidence_ref] } }
+
+  # --- Walk-in / paper-slip path ---
+  - { from: AwaitingApproval, to: CheckedIn, trigger: approver_confirm,
+      requires_human: true,
+      audit: { event: visit.checked_in, requires: [actor, reason, correlation_id] } }
+  - { from: AwaitingApproval, to: Denied, trigger: approver_deny_or_timeout,
+      requires_human: true,    # timeout escalates; final deny is a recorded human policy decision
+      audit: { event: visit.denied, requires: [actor, reason, correlation_id] } }
+  - { from: AwaitingApproval, to: Held, trigger: watchlist_match,
+      requires_human: false,
+      audit: { event: visit.held, requires: [correlation_id, hold_reason, evidence_ref] } }
+
+  # --- Secure (dual sign-off) path ---
+  - { from: AwaitingDualSignoff, to: CheckedIn, trigger: both_approvals_received,
+      requires_human: true,
+      audit: { event: visit.checked_in, requires: [actor, second_actor, correlation_id] } }
+  - { from: AwaitingDualSignoff, to: Denied, trigger: either_approver_denies,
+      requires_human: true,
+      audit: { event: visit.denied, requires: [actor, reason, correlation_id] } }
+  - { from: AwaitingDualSignoff, to: Held, trigger: watchlist_match,
+      requires_human: false,
+      audit: { event: visit.held, requires: [correlation_id, hold_reason, evidence_ref] } }
+
+  # --- Held: leaving ALWAYS requires an authorized human (no automated denial) ---
+  - { from: Held, to: CheckedIn, trigger: security_release,
+      requires_human: true, required_permission: approve_deny_holds,
+      audit: { event: hold.released, requires: [actor, reason, correlation_id, policy_version] } }
+  - { from: Held, to: Denied, trigger: security_reject,
+      requires_human: true, required_permission: approve_deny_holds,
+      audit: { event: hold.rejected, requires: [actor, reason, correlation_id, policy_version] } }
+
+  # --- On site ---
+  - { from: CheckedIn, to: CheckedOut, trigger: checkout,
+      requires_human: false,   # kiosk, badge drop, face-at-exit, or panel exit event
+      audit: { event: visit.checked_out, requires: [correlation_id, checkout_method] },
+      side_effects: [credential_deprovision_command] }
+  - { from: CheckedIn, to: Denied, trigger: host_revoke,
+      requires_human: true,
+      audit: { event: visit.revoked, requires: [actor, reason, correlation_id] },
+      side_effects: [credential_deprovision_command] }
+  - { from: CheckedIn, to: Safe, trigger: muster_marked_safe,
+      requires_human: true,    # warden marks safe
+      audit: { event: muster.safe, requires: [actor, correlation_id, assembly_point] } }
+  - { from: Safe, to: CheckedIn, trigger: evacuation_ended,
+      requires_human: true,
+      audit: { event: muster.ended, requires: [actor, correlation_id] } }
+
+invariants:
+  - name: no_automated_denial
+    rule: every transition into Denied has requires_human true
+  - name: held_exit_is_privileged
+    rule: every transition out of Held has requires_human true and required_permission approve_deny_holds
+  - name: audit_on_every_transition
+    rule: every transition declares an audit event with correlation_id
+  - name: terminal_states
+    rule: no transitions exist from CheckedOut or Denied
+  - name: credential_lifecycle
+    rule: every transition out of CheckedIn (except Safe) triggers credential_deprovision_command

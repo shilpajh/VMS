@@ -1,0 +1,17 @@
+# Python
+services/core-api/.venv/
+services/core-api/__pycache__/
+services/core-api/**/__pycache__/
+*.pyc
+
+# Node
+apps/web/node_modules/
+apps/web/dist/
+
+# Flutter
+apps/kiosk/build/
+apps/kiosk/.dart_tool/
+
+# Env
+.env
+apps/web/.env
