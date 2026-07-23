@@ -52,3 +52,37 @@ Relevant files:
 - `/home/shilpa/SmartVMS/services/core-api/app/domain/audit.py`, `/home/shilpa/SmartVMS/services/core-api/app/models/audit.py`
 - `/home/shilpa/SmartVMS/services/core-api/app/models/user.py` (`uq_users_id_tenant_id`)
 - `.claude/rules/security-privacy.md`, `.claude/rules/database-postgresql.md`, `.claude/rules/backend-python.md`, `.claude/rules/contracts.md`
+
+---
+
+# /verify-story — Track 1: Compliance/Security (post-implementation)
+
+**Reviewer:** security-privacy-reviewer (independent, read-only). **Branch:** `feature/US-11` (stacked on `feature/US-10`). **Scope:** post-implementation pass before Human Gate 2. Diff cold-read against the plan's file map and both ADRs — no scope creep found; the two additions not named verbatim in the file map (`submission_dedup_key` column, `enforce_public_rate_limits` helper) are in-scope mechanics for approved tasks 7/9. `graphify-out/graph.json` still doesn't exist — architecture-boundary check remains not-runnable, expected.
+
+## BLOCKING
+
+### B1 (carried forward, NOT resolved in US-11 — hard merge/ship gate, correctly preserved not dropped)
+US-11's three authenticated host endpoints (`app/api/visits.py` lines 62-67, 87-91, 113) all derive their RLS tenant scoping and host-ownership check from `get_current_principal`, which still carries US-10's open auth-bypass (US-10 review B1) — a forged token with an attacker-chosen `tid`/`oid` authenticates as any host in any tenant; RLS enforces a GUC value that is itself forged.
+
+**Precise status of the US-11-specific forged-token test** (`tests/test_visits_forged_token_cross_tenant.py`, read in full): rigorous and satisfies the Definition of Done, but proves isolation only *given a sound validator* (it overrides with `StaticJWKSProvider`, which doesn't carry the self-asserted-issuer defect). It does NOT and cannot prove B1 itself is fixed — the residual risk sits entirely in the shared `get_current_principal`/`HttpJWKSProvider`, covered only by the merge gate. **Neither `feature/US-10` nor `feature/US-11` may merge to a release branch or deploy until US-10 B1 is remediated.** This is the sole hard blocker for shipping; not a defect in US-11's own code.
+
+## SHOULD FIX
+
+1. **Content-hash submission dedup can return one submitter's `tracking_reference` to anyone who reproduces `contact_value`+`host_hint`.** Correctly tenant-scoped and content-hashed (not a raw client key) per the design decision — but low-entropy inputs mean a targeted guesser could retrieve someone else's reference. Low severity today (no lookup endpoint exists yet to make the reference useful) — **must be a hard prerequisite check for whatever story adds a lookup-by-reference endpoint.** Also: two legitimately distinct visits with identical contact+host collapse into one (functional side effect, not a security defect); dedup check runs before the privacy-notice acknowledgment gate.
+2. **Retention/purge for `visits`/`outbox_messages` PII confirmed still just a placeholder** (no `DELETE` grant, no purge job, no registration anywhere in the diff) — genuinely not silently assumed done. Same GA-gate status as US-10's `users` table; needs a human compliance owner. Orphaned NULL-host visits must be explicitly covered by that future purge.
+3. **Consent capture is a bare acknowledgment flag + version string, not the full versioned/linked-to-document consent framework** `security-privacy.md` describes. Satisfies the placeholder decision but is a genuine DPDP gap requiring Compliance-owner sign-off — not approvable by an agent alone.
+
+## NOTES
+- No automated-denial/biometric path exists — confirmed by reading the code, not assumed.
+- Command safety (idempotent async outbox write, deterministic globally-unique key, `not_valid_after` expiry) verified sound.
+- Envelope encryption independently verified: AES-256-GCM, fresh per-message DEK, ciphertext in `BYTEA`, never cleartext JSONB.
+- Never-log rule independently re-verified (source-scanner test re-run, including its injected-violation sanity check — not vacuously green).
+- Check-in code handled as a credential throughout: `secrets.token_urlsafe(24)`, only SHA-256 hash persisted, never returned by any endpoint.
+- Anti-enumeration verified: uniform portal response regardless of host resolution; uniform 404 for unknown/suspended tenant slug; uniform 403 for nonexistent vs. cross-tenant visit id.
+- CAPTCHA-before-tenant-resolution ordering confirmed correct (no timing oracle).
+- RBAC confirmed by reading the actual queries: `host` without `view_visits` genuinely sees only their own visits; `reception_security`/`tenant_admin` see the full tenant list.
+- RLS/migration hygiene sound: both tables `ENABLE`+`FORCE`, `USING`+`WITH CHECK`, fail-closed, tested `downgrade()`, no `DELETE` grant.
+- `visit.requested`'s audit omits `policy_version` (defensible — no RBAC policy governs an anonymous submission) — flagged for an explicit product/compliance decision, not a blocking gap.
+- All loop-state-flagged placeholders/process items (7-day check-in validity, 44-file count, non-TDD task 9) are real and honestly disclosed, none silently accepted; none affect a safety property.
+
+**Disposition:** One Blocking item (B1 — the still-open US-10 merge/ship gate, unchanged, correctly preserved). Three Should-fix items, two requiring a human compliance owner (retention registration, consent framework). US-11's own implementation is otherwise sound and matches the approved plan/ADRs.
