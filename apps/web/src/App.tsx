@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { loginRequest } from './auth/msal'
 import { useCurrentUser } from './auth/useCurrentUser'
+import { CheckinPage } from './checkin/CheckinPage'
 import { PortalPage } from './portal/PortalPage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
@@ -90,10 +91,30 @@ function usePortalTenantSlug(): string | null {
   return match ? match[1] : null
 }
 
+function useIsCheckinPath(): boolean {
+  return window.location.pathname === '/checkin'
+}
+
+// Renders CheckinPage only once /me's response confirms checkin_confirm --
+// the permission check happens here (App-level routing), never inside
+// CheckinPage itself (frontend-react.md: no policy logic in the
+// component). Falls through to StaffSession for every other case (no
+// permission, still loading, or an error) so a caller without
+// checkin_confirm sees the ordinary staff session view, not a page that
+// silently does nothing.
+function AuthenticatedCheckinGate() {
+  const { data } = useCurrentUser()
+  if (data?.permissions.includes('checkin_confirm')) {
+    return <CheckinPage />
+  }
+  return <StaffSession />
+}
+
 function App() {
   const { t } = useTranslation()
   const isAuthenticated = useIsAuthenticated()
   const portalTenantSlug = usePortalTenantSlug()
+  const isCheckinPath = useIsCheckinPath()
   const { data, error, isLoading } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
@@ -112,7 +133,13 @@ function App() {
       {data && <p>{t('health.status', 'core-api status: {{status}}', { status: data.status })}</p>}
 
       <section aria-label={t('auth.sectionLabel', 'Staff sign-in')}>
-        {isAuthenticated ? <StaffSession /> : <StaffSignIn />}
+        {!isAuthenticated ? (
+          <StaffSignIn />
+        ) : isCheckinPath ? (
+          <AuthenticatedCheckinGate />
+        ) : (
+          <StaffSession />
+        )}
       </section>
     </main>
   )

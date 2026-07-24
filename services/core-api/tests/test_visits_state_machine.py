@@ -28,6 +28,12 @@ def test_checkin_verified_from_requested_is_rejected() -> None:
         apply_transition("Requested", "checkin_verified")
 
 
+def test_registered_checkin_verified_transitions_to_checked_in() -> None:
+    """US-01, task 4: the QR check-in path -- the only new row this story
+    adds to the transition table."""
+    assert apply_transition("Registered", "checkin_verified") == "CheckedIn"
+
+
 def test_direct_transition_to_checked_in_has_no_valid_trigger_from_requested() -> None:
     with pytest.raises(InvalidTransitionError):
         apply_transition("Requested", "checkin_verified")

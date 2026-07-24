@@ -108,6 +108,19 @@ class Visit(Base):
     tracking_reference: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     checkin_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # --- Check-in (US-01) ---
+    # Persisted copy of the value already computed transiently in
+    # approve_visit and copied onto outbox_messages.not_valid_after -- lets
+    # the check-in domain layer enforce `within_visit_window` by reading
+    # this row alone, never outbox_messages (a dispatch artifact, not the
+    # domain's source of truth). A known-interim substitution for a real
+    # scheduled-arrival-window field -- see US-01 plan, Part A Risks.
+    checkin_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_in_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # --- Denial ---
     denial_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -150,9 +163,15 @@ class Visit(Base):
             ["users.id", "users.tenant_id"],
             name="fk_visits_host_user_tenant",
         ),
+        ForeignKeyConstraint(
+            ["checked_in_by_user_id", "tenant_id"],
+            ["users.id", "users.tenant_id"],
+            name="fk_visits_checked_in_by_user_tenant",
+        ),
         UniqueConstraint(
             "tenant_id", "submission_dedup_key", name="uq_visits_tenant_dedup_key"
         ),
         Index("ix_visits_tenant_id", "tenant_id"),
         Index("ix_visits_host_user_id", "host_user_id"),
+        Index("ix_visits_checked_in_by_user_id", "checked_in_by_user_id"),
     )

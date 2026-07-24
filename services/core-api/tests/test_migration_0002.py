@@ -85,8 +85,12 @@ def test_upgrade_head_creates_visits_and_outbox_tables(scratch_database: str) ->
 
 
 def test_downgrade_one_step_removes_only_0002_additions(scratch_database: str) -> None:
+    """Upgrades to 0002 specifically (not "head", which now includes
+    0003_visit_checkin on top per US-01) -- a relative "-1 from head" would
+    silently start testing the wrong migration's downgrade() every time a
+    later migration lands, so this pins the absolute revision under test."""
     cfg = alembic_config(_migrator_dsn(scratch_database))
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0002_visits_and_outbox")
 
     command.downgrade(cfg, "-1")
     tables = _table_names(scratch_database)

@@ -142,6 +142,44 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /visits/checkin:
+    post:
+      summary: Check in a Registered visit via QR code (authenticated reception/security)
+      operationId: checkinVisit
+      description: >
+        US-01, hardware-free QR path. Requires checkin_confirm (tenant-
+        scoped only -- no host-ownership check, unlike approve/deny, since
+        this is a reception/security action operating on behalf of an
+        arriving visitor, not a host decision).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VisitCheckinRequest"
+      responses:
+        "200":
+          description: >
+            CheckedIn. A credential-grant command and a host-arrival-
+            notification were recorded asynchronously via the transactional
+            outbox (ADR-003) -- never returned in this response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Visit" }
+        "403":
+          description: Caller lacks checkin_confirm.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: >
+            Invalid or expired check-in code. Uniform across every
+            rejection cause -- unknown hash, wrong tenant, expired,
+            already consumed -- never distinguishable (anti-enumeration).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /visits/{visit_id}/deny:
     post:
       summary: Deny a Requested visit (authenticated host)
@@ -211,6 +249,17 @@ components:
       properties:
         reason: { type: string, minLength: 1 }
 
+    VisitCheckinRequest:
+      type: object
+      required: [checkin_code]
+      properties:
+        checkin_code:
+          type: string
+          minLength: 1
+          description: >
+            Plaintext QR-decoded bearer credential. POST body only -- never
+            a query/path param.
+
     Visit:
       type: object
       properties:
@@ -229,6 +278,7 @@ components:
         correlation_id: { type: string, format: uuid }
         decided_by_user_id: { type: string, format: uuid, nullable: true }
         decided_at: { type: string, format: date-time, nullable: true }
+        checked_in_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
 
     Error:

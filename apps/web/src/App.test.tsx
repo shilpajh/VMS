@@ -133,4 +133,53 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
     expect(screen.queryByText(/no roles assigned yet/i)).not.toBeInTheDocument()
   })
+
+  describe('/checkin routing gate (US-01)', () => {
+    afterEach(() => {
+      window.history.pushState({}, '', '/')
+    })
+
+    it('renders CheckinPage at /checkin when the caller has checkin_confirm', async () => {
+      window.history.pushState({}, '', '/checkin')
+      mockAuthenticatedMsal('acc-reception')
+      mockHealthAndMeFetch(
+        new Response(
+          JSON.stringify({
+            id: 'user-3',
+            tenant_id: 'tenant-1',
+            display_name: 'Reception Staff',
+            roles: ['reception_security'],
+            permissions: ['checkin_confirm'],
+          }),
+          { status: 200 },
+        ),
+      )
+
+      renderApp()
+
+      await waitFor(() => expect(screen.getByLabelText(/check-in code/i)).toBeInTheDocument())
+    })
+
+    it('falls through to StaffSession at /checkin when the caller lacks checkin_confirm', async () => {
+      window.history.pushState({}, '', '/checkin')
+      mockAuthenticatedMsal('acc-host-only')
+      mockHealthAndMeFetch(
+        new Response(
+          JSON.stringify({
+            id: 'user-4',
+            tenant_id: 'tenant-1',
+            display_name: 'Host Only',
+            roles: ['host'],
+            permissions: ['approve_deny_visits'],
+          }),
+          { status: 200 },
+        ),
+      )
+
+      renderApp()
+
+      await waitFor(() => expect(screen.getByText(/Host Only/)).toBeInTheDocument())
+      expect(screen.queryByLabelText(/check-in code/i)).not.toBeInTheDocument()
+    })
+  })
 })

@@ -27,7 +27,15 @@ transitions:
   - { from: Registered, to: CheckedIn, trigger: checkin_verified,
       requires_human: false,   # frictionless QR/biometric happy path
       guards: [identity_verified, watchlist_clear, within_visit_window],
-      audit: { event: visit.checked_in, requires: [actor, correlation_id, verification_method] } }
+      audit: { event: visit.checked_in, requires: [actor, correlation_id, verification_method] },
+      side_effects: [credential_grant_command] }
+      # side_effects note (US-01, ADR-003): CheckedIn is also reachable via
+      # approver_confirm, both_approvals_received, and security_release
+      # below -- none of those three currently declare
+      # credential_grant_command. This is a known, tracked gap (ADR-003),
+      # not an invariant enforced here yet -- a future walk-in/dual-
+      # signoff/hold-release story must either add the same side effect to
+      # its own transition or the gap persists silently.
   - { from: Registered, to: Held, trigger: watchlist_match,
       requires_human: false,   # entering Held is automatic; LEAVING it never is
       audit: { event: visit.held, requires: [correlation_id, hold_reason, evidence_ref] } }
