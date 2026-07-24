@@ -2,7 +2,9 @@
 
 Status: Approved (Human Gate 1, 2026-07-24 — refreshed against the merged US-13a backend; supersedes the pre-implementation draft. CORS fix + traceability kept in-scope per approval.)
 
-> Frontend redesign that consumes the US-13a backend (now merged to `main`). **Refreshed after US-13a shipped**, which changed two things the original draft couldn't know: (1) the current portal form is now *broken* against the backend, and (2) the OTP flow can't complete for real users yet. Two Gate-1 decisions were taken (below). Design reference: `visitor_management_prototype (1).jsx`'s `VisitorPortal` + the prototype screenshot — structure, not pixel-fidelity.
+> Frontend redesign that consumes the US-13a backend (now merged to `main`). **Refreshed after US-13a shipped**, which changed two things the original draft couldn't know: (1) the current portal form is now *broken* against the backend, and (2) the OTP flow can't complete for real users yet. Two Gate-1 decisions were taken (below). Design reference: `visitor_management_prototype (1).jsx`'s `VisitorPortal` + the prototype screenshot.
+
+> **Gate-1 amendment — 2026-07-24 (during execution, human-directed): Decision 2 reversed to MATCH the prototype's look.** After seeing the plain-grid build, the human explicitly asked (mid-`/execute-story`, confirmed via a direct question) for the portal to look like the prototype — the two-panel illustrated layout (blue left panel with acme branding + reception SVG, cards on the right) that Decision 2 below originally rejected. This is a human Gate-1 amendment, not an agent working around the plan: the styling change (`PortalPage.tsx` two-panel layout + new decorative `PortalIllustration.tsx`) was built per that instruction. Scope of the amendment is **visual only** — the prototype's OTP flow (no relay worker) and its Feedback/manual cards (no PRD grounding) remain out of scope, re-confirmed with the human at the same time. The rejected-alternative note and Decision 2 text below are left as originally written to preserve the trail; this amendment supersedes them.
 
 ## Part A — Intent
 
@@ -83,7 +85,8 @@ Feature: Portal redesign (US-13b)
 
 **Frontend (apps/web/src/portal)**
 - `PortalRequestForm.tsx` — amend: add the now-required fields (purpose input, group_type radio, conditional expected_group_size, identity_verification_choice radio); keep the existing Turnstile + privacy-ack.
-- `PortalPage.tsx` — amend: card-grid layout (Request a visit / Track a visit / Log in), replacing the single-form page.
+- `PortalPage.tsx` — amend: two-panel layout (left branding/illustration panel + Request a visit / Track a visit / Log in cards), replacing the single-form page. (Per the Gate-1 amendment above — originally a plain grid.)
+- `PortalIllustration.tsx` — new (Gate-1 amendment): the decorative reception-scene SVG for the left panel, `aria-hidden`.
 - `TrackingLookup.tsx` — new: the Track-a-visit card (drives `GET .../visit-requests/{ref}`).
 - `portalApi.ts` — new: typed fetch wrappers for submit + lookup (request shapes in one place, matching the contract).
 - Tests: `PortalRequestForm.test.tsx` (amend — new fields, group-size rule, generic error), `TrackingLookup.test.tsx` (new), `PortalPage.test.tsx` (new — three cards, login link).
