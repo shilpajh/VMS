@@ -145,3 +145,44 @@ Independent re-run: **185 passed, 1 failed (pre-existing US-10 gap, unrelated), 
 **Migration:** none required. `submission_dedup_key` remains `String(64)` with the existing `uq_visits_tenant_dedup_key` unique constraint on `(tenant_id, submission_dedup_key)` — only the Python-side hash input changed, not the column type, nullability, or constraint shape.
 
 **Verification:** the renamed exploit test, inverted, now demonstrates the attacker's forged-key resubmission creates a separate visit with a distinct `tracking_reference` (previously it demonstrated the leak and passed). Full test suite re-run confirms no regression (see commit for exact pass count). Independent re-verification (a fresh `/verify-story` pass, not self-assessment by the implementing agent) is still required before this finding can be considered closed, per this project's verifier-first policy — this section records that the fix was applied and locally verified, not that it has been independently re-reviewed.
+
+---
+
+## `/verify-story` re-run — independent re-verification
+
+**Branch:** `feature/US-11` at `23b7e47`. Both prior Blocking findings addressed by: US-10's own remediation (`5a2ff65`, merged into this branch via `81cc624`) for B1, and commit `e9cd981` for the dedup cross-actor leak. Re-verified independently by fresh security-privacy-reviewer and qa-automation-engineer agents — neither trusted commit messages or the prior addendum as ground truth.
+
+### Track 1 re-verification (security-privacy-reviewer)
+
+**B1: RESOLVED for US-11's purposes.** Confirmed the pinned-issuer fix is genuinely present in the current file content on this branch (not just merged by commit hash): `app/auth/entra.py:170-192` takes `expected_issuer` as a caller-supplied argument, fetches JWKS only from that trusted URL, and rejects any mismatched `iss`; `app/auth/dependencies.py:114` derives it from the DB-stored `tenants.entra_tenant_id`. US-11's three host endpoints (`app/api/visits.py`) still correctly derive tenant scoping from `get_current_principal`, now on the fixed foundation. Commit `ea78cc9`'s mechanical `StaticJWKSProvider` re-keying did not weaken `test_visits_forged_token_cross_tenant.py` — all 11 forged-token/iss-pinning tests pass, run live.
+
+**Dedup fix (Blocking item 2): RESOLVED.** `app/api/portal.py:51-72` now hashes `idempotency_key + contact_value + host_hint` — the client's actual header value is genuinely part of the hash material, not just its presence. Read the renamed test's assertions directly (not just its name/green status): the attacker's differing key now produces a distinct `tracking_reference` and a distinct row (count==2), and the legitimate same-key/same-content case still dedups correctly.
+
+**NEW FINDING — portal-UI scope creep (governance-level Blocking, requires a human plan-gate decision):** Two commits (`2a65ae0`, `23b7e47`) landed on this branch *after* the prior `/verify-story` pass recorded "no scope creep found," adding a full React public-submission form (Tailwind, `PortalRequestForm.tsx`, `PortalPage.tsx`, `Turnstile.tsx`). `docs/plans/US-11.md:23` — approved at Human Gate 1 — explicitly fences this out: *"No actual portal/host UI screens... this story is backend-only."* The commit message self-justifies this as a Quick Flow follow-up, but it fails Quick Flow on two counts: it touches 6-7 files (threshold is ≤3), and it touches consent-surface (a privacy-notice acknowledgment control), which Quick Flow explicitly excludes. This is a plan-conformance violation under AGENTS.md's Spec-contradiction rule ("stop and go back to Plan — never silently work around it in code"), not a code-security defect.
+
+The code itself, evaluated independently, is security-clean: no PII sent to third parties or persisted client-side (checked for `console.`/`localStorage`/`sessionStorage`/analytics calls — none found), only a public Turnstile dev site-key embedded (no secret), anti-enumeration preserved (uniform success/error rendering), privacy-notice checkbox required client-side with independent server-side 422 enforcement. One privacy sub-note: the acknowledgment checkbox references "privacy notice (version v1)" but no actual notice document is linked or shown — visitors acknowledge a notice they cannot read, sharpening the DPDP salience of the already-open consent-framework Should-fix below.
+
+**Recommendation:** treat as blocking the merge as currently composed. Two resolutions, both requiring a human plan owner, neither an agent decision: (a) drop `2a65ae0`+`23b7e47` from this branch and land them under their own properly-planned UI story (which would also trigger the mandatory portal-guardrail design review for a new unauthenticated-surface UI, which never happened here), or (b) an explicit Human-Gate-1 scope amendment to `docs/plans/US-11.md` folding the UI in.
+
+`identity.yaml` absence reconfirmed expected (US-10's own deliverable, resolved on `feature/US-10` at `505bd16`, not yet merged forward to this branch — not a US-11 defect). All three prior Should-fix items (retention/purge registration, consent framework, `visit.requested` missing `policy_version`) reconfirmed still open, unchanged.
+
+### Track 2 re-verification (qa-automation-engineer)
+
+Backend suite run twice for stability: **191 passed, 1 failed (pre-existing, non-regressing — the `identity.yaml` gap, fix exists upstream on `feature/US-10`, not yet merged forward), 1 skipped**. Tenant-isolation/forged-token coverage re-confirmed 18/18 across `test_visits_forged_token_cross_tenant.py` + US-10's tenant-isolation suites. Dedup fix independently re-verified by reading the inverted test's assertions directly (distinct reference + distinct row count for a differing key; same-key/content still dedups).
+
+**Criterion #8 (Accessibility) disposition changed** from the prior pass's "N/A, backend-only" — no longer accurate now that a real UI exists. Re-tested fresh: all form inputs have correctly associated labels (verified via `getByLabelText` in the component test, which fails on broken association), error state uses `role="alert"` not color-only, all user-facing strings route through `t()` matching US-10's established i18n pattern. An ad hoc `jsx-a11y` lint pass found zero issues. **Gap stated explicitly, not silently dropped:** no `jest-axe`/`axe-core` dependency and no `jsx-a11y` plugin enabled in the checked-in `.oxlintrc.json` — accessibility is currently correct by construction, not CI-enforced. Frontend suite: 11/11 passed, `tsc -b` clean, `oxlint` clean. Client-side check confirmed the new form makes exactly one network call (the submission POST) — no separate enumeration oracle, no CAPTCHA bypass (server-side enforcement unchanged and still the actual gate).
+
+### Combined disposition — cycle 1 status
+
+**Code-level Blocking findings: zero.** Both B1 and the dedup cross-actor leak are independently re-verified as fixed, by different agents than the ones that implemented the fixes.
+
+**Governance-level Blocking finding: one, NEW.** Portal-UI scope creep (`2a65ae0`, `23b7e47`) past the Human-Gate-1-approved, explicitly backend-only plan. This is not remediable by looping back to `/execute-story` for a code fix — per AGENTS.md's Spec-contradiction rule, it requires a human plan-gate decision (drop the commits into their own properly-reviewed UI story, or amend the approved plan). **This finding does not proceed to `/document-story` until a human resolves it.**
+
+**Should-fix carried forward (non-blocking):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — needs a human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to an actual document) — needs a human compliance owner; now more visible via the new UI's unlinked "privacy notice" reference.
+- `visit.requested` audit omits `policy_version` — needs an explicit product/compliance decision.
+- No CI-enforced accessibility tooling (`jest-axe`/`jsx-a11y`) for the new portal UI — currently correct by construction only.
+- `packages/contracts/openapi/identity.yaml` missing on this branch — resolved upstream on `feature/US-10`, will clear on the next merge-forward; not a new item.
+
+**Result: 0 code-level Blocking findings, 1 governance-level Blocking finding → escalates to a human plan owner, not to `/execute-story`.**
