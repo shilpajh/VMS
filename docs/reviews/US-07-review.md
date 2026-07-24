@@ -43,3 +43,52 @@ The DPDP-GA-gate posture is handled correctly (placeholders, sign-off kept open 
 
 ## Combined disposition
 **6 Blocking, 9 Should-fix.** None is a code fix — all are ADR-005/plan design decisions to settle before Gate 1, and several (SP-B1 masking, SP-B2 safety model, DA-B2 erasure carve-out, anonymization-vs-erasure) touch privacy/compliance choices needing the human compliance owner the story already defers to. The DPDP sign-off GA gate stays open and correct. The plan returns to the author for a comprehensive revision + ADR-005, then re-submits to Gate 1.
+
+---
+
+# US-07 — verify-story pass (post-implementation, independent cold reads)
+
+Two independent reviewers read the built `feature/US-07` branch cold (security-privacy-reviewer, qa-automation-engineer). This section is appended below the design-gate findings above; it does not replace them. Every prior design-gate Blocker (DA-B1..B3, SP-B1..B3) was confirmed **resolved in code**, not merely claimed.
+
+## security-privacy-reviewer — verify pass
+
+### Blocking
+**None.** All six design-gate blockers verified resolved in code (traced across migrations 0001/0002/0004/0005):
+- **SP-B2 (structural isolation):** `vms_purge` is `NOBYPASSRLS` (`app/db/roles.sql`); RLS ENABLE+FORCE + `tenant_isolation` policy confirmed on all four mutated tables; the per-tenant GUC is set before any mutation in both scripts; a forgotten GUC fails closed (single-arg `current_setting` raises). No mutation path reaches a target table without the GUC.
+- **DA-B1:** `users.disabled_at` set on disable / cleared on re-enable (`app/api/identity.py`); clocks are `disabled_at`/`decided_at`/`created_at`, never `updated_at`.
+- **SP-B3:** all six visit PII columns scrubbed incl. `purpose`; outbox deleted by age across all statuses (no status filter).
+- **DA-B3:** erasure deletes outbox by `visit_ids + verification_ids` (both anchors).
+- **DA-B2:** `OnSiteErasureRefused` for `CheckedIn`/`Safe`; same states excluded from purge.
+- **SP-B1:** erasure `subject_ref` is a keyed HMAC; `audit_events` is INSERT-only for `vms_purge`.
+
+### Should-fix — all remediated this pass
+- L: 🟡 stray `node_modules/.vite/vitest/…/results.json` committed on branch (US-13a class). **Fixed** — untracked + root `node_modules/`/`.vite/` gitignored (`f8c408b`).
+- L: 🟡 purge audit `details` had counts+cutoffs but not the resolved window/`policy_version`; not self-describing. **Fixed** — `retention_seconds` per category + `policy_version` now recorded (`eb68630`).
+- L: 🟡 `_ABANDONED_STATUSES` covers only `Requested`/`Registered`; `Held`/`Awaiting*`/`Checked-out` also hold PII (unreachable today). **Fixed** — ADR-005 forward-requirement note added (`eb68630`).
+
+### Notes
+- `set_purge_tenant` f-string-interpolates a DB-sourced UUID (never user input) — safe, same established pattern as `set_tenant_context`; `set_config(..., true)` would remove interpolation as defense-in-depth.
+- `vms_purge` has `SELECT` on `audit_events` (for `INSERT…RETURNING`), slightly broader than plan's "INSERT only" — RLS-scoped, acceptable.
+- `erase_visitor` writes an audit row even on 0 matches (unlike `erase_staff`) — harmless, PII-free; left as-is.
+
+## qa-automation-engineer — verify pass
+
+**Suite:** 341 passed (334 pre-existing + 7 new coverage-gap tests). Every DoD bullet mapped to a passing test.
+
+### Real bug found — FIXED
+- **`erase_subject.py` CLI echoed the raw `--value` contact to stdout** (dry-run + APPLIED), violating the DoD "no PII in logs" bullet — a real leak path when ops-script stdout is captured to a shared log. Proven by `test_erase_subject_cli_output_contains_no_raw_contact_pii` (initially FAIL). **Fixed** in `e212f52` (masked, non-PII label); the test now passes.
+
+### Coverage gaps closed (new tests, `tests/test_retention_coverage_gaps.py`) — all PASS
+- All six visit PII columns scrubbed, both purge and erasure paths (prior tests spot-checked 2–3).
+- Fresh rows byte-identical (full row tuple) after `--execute`, all four stores.
+- Crash-mid-run-then-rerun idempotency: resumed run counts only remaining rows, no double-count in the audit, third run touches 0.
+- ≤72h erasure SLA: `erase_visitor` completes synchronously in one transaction (measured 0.0536s), no deferral outbox row created.
+- `disabled_at` stamped/cleared via the real `PATCH …/users/{id}` API (prior test only checked a fresh user's NULL).
+
+### NOT TESTABLE (explicit)
+Real scheduler/cron wiring; real Key Vault HMAC provider; real production-environment activation; the compliance-owner sign-off items (final windows, anonymization-vs-erasure per DPDP category, on-site life-safety carve-out semantics, re-identification of the scrubbed skeleton) — all named open in the plan/ADR-005, none adjudicable by a test.
+
+---
+
+## verify-story disposition
+**Zero Blocking. One real bug (CLI PII leak) + three Should-fix — all remediated in remediation cycle 1** (`f8c408b`, `e212f52`, `eb68630`), full suite green at 341. Every mapped acceptance criterion passes or is explicitly dispositioned NOT TESTABLE. **Exit criteria met → `/document-story`.** The DPDP-GA compliance sign-off gate remains open by design (Constraint 1) and is out of scope for this story's merge.
