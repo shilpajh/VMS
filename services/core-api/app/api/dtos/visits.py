@@ -12,19 +12,69 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class PortalOtpRequestCreate(BaseModel):
+    """US-13a: request an OTP for a contact channel. Consent is captured
+    HERE (decision 3) -- before any PII is stored/dispatched."""
+
+    contact_channel: Literal["email", "sms"]
+    contact_value: str = Field(min_length=1, max_length=320)
+    privacy_notice_acknowledged: bool = False
+    privacy_notice_version: str = Field(min_length=1, max_length=32)
+    turnstile_token: str = Field(min_length=1)
+
+
+class PortalOtpRequestAccepted(BaseModel):
+    """Uniform 202 -- generic, never reveals whether the contact was known
+    or had a prior OTP (anti-enumeration)."""
+
+    detail: str = "if the contact is valid, a code has been sent"
+
+
+class PortalOtpVerifyRequest(BaseModel):
+    """US-13a: verify an OTP, receive a single-use verification token."""
+
+    contact_channel: Literal["email", "sms"]
+    contact_value: str = Field(min_length=1, max_length=320)
+    otp_code: str = Field(min_length=1, max_length=12)
+    turnstile_token: str = Field(min_length=1)
+
+
+class PortalOtpVerifyAccepted(BaseModel):
+    """The plaintext verification token -- transient, client-held only until
+    submission (mirrors the check-in code's handling)."""
+
+    verification_token: str
 
 
 class PortalVisitRequestCreate(BaseModel):
-    """Public, unauthenticated portal submission body (task 9)."""
+    """Public, unauthenticated portal submission body (US-11 task 9;
+    US-13a adds purpose/group/identity-choice + the verification token)."""
 
     visitor_full_name: str = Field(min_length=1, max_length=255)
     contact_channel: Literal["email", "sms"]
     contact_value: str = Field(min_length=1, max_length=320)
     host_hint: str | None = Field(default=None, max_length=255)
+    purpose: str = Field(min_length=1, max_length=255)
+    group_type: Literal["individual", "group"]
+    expected_group_size: int | None = Field(default=None, ge=1)
+    identity_verification_choice: Literal["upload_now", "send_to_host"]
+    # Required only when settings.portal_otp_required is on (enforced in the
+    # endpoint, not here, so the flag-off path keeps US-11 behavior).
+    verification_token: str | None = Field(default=None)
+    # US-11 consent fields -- still used on the flag-OFF path (no token); on
+    # the flag-ON path the version comes from the verified row instead.
     privacy_notice_acknowledged: bool = False
     privacy_notice_version: str = Field(min_length=1, max_length=32)
     turnstile_token: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _group_size_required_for_group(self) -> "PortalVisitRequestCreate":
+        if self.group_type == "group" and self.expected_group_size is None:
+            raise ValueError("expected_group_size is required when group_type is 'group'")
+        return self
 
 
 class PortalVisitRequestAccepted(BaseModel):
@@ -32,6 +82,17 @@ class PortalVisitRequestAccepted(BaseModel):
     visit data, whether or not host_hint resolved (anti-enumeration)."""
 
     tracking_reference: str
+
+
+class PortalTrackingStatus(BaseModel):
+    """US-13a tracking-lookup response. Status + the visitor's OWN submitted
+    details only -- `host_hint` is the string the visitor typed, NEVER the
+    resolved employee's display_name, and NEVER a check-in code (decision 2;
+    US-13 review B2)."""
+
+    status: str
+    visitor_full_name: str
+    host_hint: str | None
 
 
 class VisitOut(BaseModel):

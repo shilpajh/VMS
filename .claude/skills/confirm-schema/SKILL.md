@@ -29,6 +29,7 @@ Run this on every migration before /verify-story, not just once at project start
 - [ ] `downgrade()` is implemented and has actually been run once in a non-prod environment, not just present in the file.
 - [ ] Destructive changes (drop column/table, narrowing a type) have a backfill/compatibility plan, not just the migration itself.
 - [ ] Migration is idempotent against re-run in CI.
+- [ ] Any `-1`-relative downgrade test pins the ABSOLUTE revision under test (`upgrade(cfg, "<this_revision>")` then `downgrade(-1)`), NEVER `upgrade(cfg, "head")` then `downgrade(-1)`. A `-1`-from-head test silently retargets the *newest* migration the moment a later one lands on top, so it stops exercising the migration it was written for and starts (usually failing on) the new one. This has recurred on 0002, 0003, and 0004 — pin the revision so the next migration doesn't break a prior story's test (US-13a gotcha).
 
 ## 5. Architecture-boundary check
 - [ ] Run `/graph-query` on the new table — confirm it's written to only from its owning module's code (per the module boundaries: Tenant & Identity / Visitor & Visits / Approvals & Security / Credential Policy / Compliance / Integration / Audit & Reporting). A table written to from an unexpected module is a signal the module boundary has blurred — flag it to domain-architect even if this story doesn't need to fix it.

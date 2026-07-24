@@ -52,6 +52,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -130,6 +131,21 @@ class Visit(Base):
     )
     privacy_notice_version: Mapped[str] = mapped_column(String(32), nullable=False)
 
+    # --- Portal submission detail (US-13a; PRD 3.1) ---
+    # All nullable (existing visits predate them). `group_type='group'` with
+    # `expected_group_size` makes a group visit's head-count visible to
+    # muster/`Safe` accounting even though per-member records are a later
+    # story (US-13a plan, Risks). `contact_verified` records whether the
+    # visit was created via a validated OTP verification token -- a non-PII
+    # trust property (never the contact_value itself).
+    purpose: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    group_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    expected_group_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    identity_verification_choice: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    contact_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     # --- Public-submission anti-replay dedup (US-11 review, Should-fix #1) ---
     submission_dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -157,6 +173,15 @@ class Visit(Base):
         ),
         CheckConstraint(
             "contact_channel IN ('email', 'sms')", name="ck_visits_contact_channel"
+        ),
+        CheckConstraint(
+            "group_type IS NULL OR group_type IN ('individual', 'group')",
+            name="ck_visits_group_type",
+        ),
+        CheckConstraint(
+            "identity_verification_choice IS NULL OR "
+            "identity_verification_choice IN ('upload_now', 'send_to_host')",
+            name="ck_visits_identity_verification_choice",
         ),
         ForeignKeyConstraint(
             ["host_user_id", "tenant_id"],

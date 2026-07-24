@@ -21,24 +21,47 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dtos.visits import PortalVisitRequestAccepted, PortalVisitRequestCreate
+from app.api.dtos.visits import (
+    PortalOtpRequestAccepted,
+    PortalOtpRequestCreate,
+    PortalOtpVerifyAccepted,
+    PortalOtpVerifyRequest,
+    PortalTrackingStatus,
+    PortalVisitRequestAccepted,
+    PortalVisitRequestCreate,
+)
 from app.auth.public_tenant import resolve_public_tenant
 from app.config import settings
+from app.crypto.envelope import EnvelopeKeyProvider, encrypt_payload, get_envelope_key_provider
+from app.crypto.hmac_hash import HmacKeyProvider, get_hmac_key_provider
 from app.db.session import get_session
 from app.domain.audit import write_audit_event
+from app.domain.portal.otp import (
+    InvalidOtpError,
+    InvalidVerificationTokenError,
+    consume_verification_token,
+    issue_otp,
+    verify_otp_and_issue_token,
+)
 from app.domain.visits.tracking_reference import assign_unique_tracking_reference
-from app.models import User, Visit
+from app.models import OutboxMessage, User, Visit
 from app.security.captcha import TurnstileVerifier, get_captcha_verifier
 from app.security.rate_limit import (
     TokenBucketRateLimiter,
+    get_otp_request_contact_limiter,
+    get_otp_request_ip_limiter,
+    get_otp_verify_ip_limiter,
     get_per_ip_rate_limiter,
     get_per_tenant_rate_limiter,
+    get_tracking_lookup_ip_limiter,
+    get_tracking_lookup_tenant_limiter,
     resolve_client_ip,
 )
 
@@ -46,6 +69,13 @@ router = APIRouter()
 
 VISIT_REQUESTED_REASON = "portal_submission"
 PORTAL_ACTOR = "portal"
+
+
+def otp_dispatch_idempotency_key(verification_id: uuid.UUID) -> str:
+    """Deterministic per verification row -- fresh UUID per otp/request means
+    a legitimate resend re-dispatches (ADR-004), unlike the one-approval-per-
+    visit check-in-code dispatch key."""
+    return hashlib.sha256(f"portal.otp.dispatch:{verification_id}".encode()).hexdigest()
 
 
 def _submission_dedup_key(idempotency_key: str, contact_value: str, host_hint: str | None) -> str:
@@ -88,6 +118,133 @@ async def _resolve_host_user_id(
 
 
 @router.post(
+    "/public/portal/{tenant_slug}/otp/request",
+    response_model=PortalOtpRequestAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_portal_otp(
+    tenant_slug: str,
+    body: PortalOtpRequestCreate,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    captcha_verifier: TurnstileVerifier = Depends(get_captcha_verifier),
+    ip_limiter: TokenBucketRateLimiter = Depends(get_otp_request_ip_limiter),
+    contact_limiter: TokenBucketRateLimiter = Depends(get_otp_request_contact_limiter),
+    hmac_provider: HmacKeyProvider = Depends(get_hmac_key_provider),
+    key_provider: EnvelopeKeyProvider = Depends(get_envelope_key_provider),
+) -> PortalOtpRequestAccepted:
+    """US-13a. Order: CAPTCHA -> rate-limit (per-IP + per-contact) ->
+    tenant-resolve -> privacy-ack gate -> supersede+issue OTP + encrypted
+    dispatch (atomic). Always a generic 202 -- never reveals whether the
+    contact is known or had a prior OTP (anti-enumeration)."""
+    client_ip = resolve_client_ip(
+        remote_addr=request.client.host if request.client else None,
+        x_forwarded_for=request.headers.get("x-forwarded-for"),
+        trust_forwarded_for=settings.trust_forwarded_for,
+    )
+    # 1. CAPTCHA -- before any DB work / tenant resolution.
+    if not await captcha_verifier.verify(body.turnstile_token, remote_ip=client_ip):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="captcha verification failed")
+    # 2. Dedicated rate limits (per-IP + per-contact_value) -- OTP-request is
+    # the highest-risk surface (vendor cost + delivery to a third party).
+    if not await ip_limiter.check(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+    if not await contact_limiter.check(f"{body.contact_channel}:{body.contact_value}"):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+    # 3. Tenant resolution -- SET LOCAL before any tenant-scoped write.
+    tenant = await resolve_public_tenant(tenant_slug, session=session)
+    # 4. Consent gate -- BEFORE storing PII / dispatching (US-13a decision 3).
+    if not body.privacy_notice_acknowledged:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="privacy notice acknowledgment required",
+        )
+    # 5. Supersede prior + issue a fresh OTP row.
+    row, code = await issue_otp(
+        session,
+        tenant_id=tenant.id,
+        contact_channel=body.contact_channel,
+        contact_value=body.contact_value,
+        privacy_notice_version=body.privacy_notice_version,
+        hmac_provider=hmac_provider,
+    )
+    # 6. Encrypted dispatch intent (ADR-004; reuses ADR-002's outbox). The
+    # plaintext OTP + contact_value live ONLY inside the encrypted payload.
+    payload = {
+        "schema_version": "1",
+        "tenant_id": str(tenant.id),
+        "verification_id": str(row.id),
+        "contact_channel": body.contact_channel,
+        "contact_value": body.contact_value,
+        "otp_code": code,
+        "idempotency_key": otp_dispatch_idempotency_key(row.id),
+    }
+    encrypted = encrypt_payload(json.dumps(payload).encode(), key_provider)
+    session.add(
+        OutboxMessage(
+            tenant_id=tenant.id,
+            message_type="portal.otp.dispatch",
+            aggregate_type="portal_contact_verification",
+            aggregate_id=row.id,
+            correlation_id=row.id,  # no visit/correlation yet; the row id anchors it
+            idempotency_key=otp_dispatch_idempotency_key(row.id),
+            payload=encrypted.ciphertext,
+            payload_key_ref=encrypted.key_ref,
+            status="pending",
+            not_valid_after=row.otp_expires_at,
+        )
+    )
+    await session.flush()
+    return PortalOtpRequestAccepted()
+
+
+@router.post(
+    "/public/portal/{tenant_slug}/otp/verify",
+    response_model=PortalOtpVerifyAccepted,
+)
+async def verify_portal_otp(
+    tenant_slug: str,
+    body: PortalOtpVerifyRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    captcha_verifier: TurnstileVerifier = Depends(get_captcha_verifier),
+    ip_limiter: TokenBucketRateLimiter = Depends(get_otp_verify_ip_limiter),
+    hmac_provider: HmacKeyProvider = Depends(get_hmac_key_provider),
+) -> PortalOtpVerifyAccepted:
+    """US-13a. One uniform 400 for every failure (no pending OTP / wrong /
+    expired / exhausted); 200 + a single-use verification token on success."""
+    client_ip = resolve_client_ip(
+        remote_addr=request.client.host if request.client else None,
+        x_forwarded_for=request.headers.get("x-forwarded-for"),
+        trust_forwarded_for=settings.trust_forwarded_for,
+    )
+    if not await captcha_verifier.verify(body.turnstile_token, remote_ip=client_ip):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="captcha verification failed")
+    if not await ip_limiter.check(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+    tenant = await resolve_public_tenant(tenant_slug, session=session)
+
+    try:
+        token = await verify_otp_and_issue_token(
+            session,
+            tenant_id=tenant.id,
+            contact_channel=body.contact_channel,
+            contact_value=body.contact_value,
+            otp_code=body.otp_code,
+            hmac_provider=hmac_provider,
+        )
+    except InvalidOtpError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid or expired code"
+        ) from None
+
+    # The PII-free portal.otp.verified audit is written inside
+    # verify_otp_and_issue_token (domain layer, with the real verification
+    # row id) -- same domain-writes-audit pattern as US-01's checkin_visit.
+    return PortalOtpVerifyAccepted(verification_token=token)
+
+
+@router.post(
     "/public/portal/{tenant_slug}/visit-requests",
     response_model=PortalVisitRequestAccepted,
     status_code=status.HTTP_202_ACCEPTED,
@@ -100,6 +257,7 @@ async def submit_portal_visit_request(
     captcha_verifier: TurnstileVerifier = Depends(get_captcha_verifier),
     per_ip_limiter: TokenBucketRateLimiter = Depends(get_per_ip_rate_limiter),
     per_tenant_limiter: TokenBucketRateLimiter = Depends(get_per_tenant_rate_limiter),
+    hmac_provider: HmacKeyProvider = Depends(get_hmac_key_provider),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> PortalVisitRequestAccepted:
     client_ip = resolve_client_ip(
@@ -122,7 +280,10 @@ async def submit_portal_visit_request(
     tenant = await resolve_public_tenant(tenant_slug, session=session)
 
     # 4. Idempotency-Key dedup -- tenant-scoped (post-GUC), bound to BOTH the
-    # actual client-supplied header value and submission content.
+    # actual client-supplied header value and submission content. Runs BEFORE
+    # verification-token consume (step 5) so a legitimate idempotent retry
+    # returns the existing reference instead of 422-ing on an already-spent
+    # token (US-13 review Should-fix S3 / dom-arch S3).
     dedup_key = (
         _submission_dedup_key(idempotency_key, body.contact_value, body.host_hint)
         if idempotency_key
@@ -139,12 +300,42 @@ async def submit_portal_visit_request(
         if existing is not None:
             return PortalVisitRequestAccepted(tracking_reference=existing.tracking_reference)
 
-    # 5. Privacy notice acknowledgment required.
-    if not body.privacy_notice_acknowledged:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="privacy notice acknowledgment required",
-        )
+    # 5. Contact verification (US-13a). When portal_otp_required is ON, a
+    # validated verification_token is mandatory and is consumed here (single-
+    # use, scoped to THIS submission's contact_channel/contact_value); the
+    # visit's privacy_notice_version comes from the verified row (consent was
+    # captured at otp/request). When OFF, US-11 behavior is unchanged: the
+    # DTO's own privacy_notice_acknowledged/version gate applies and no token
+    # is required.
+    contact_verified = False
+    privacy_notice_version = body.privacy_notice_version
+    if settings.portal_otp_required or body.verification_token is not None:
+        if body.verification_token is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="verification token required",
+            )
+        try:
+            privacy_notice_version = await consume_verification_token(
+                session,
+                tenant_id=tenant.id,
+                contact_channel=body.contact_channel,
+                contact_value=body.contact_value,
+                verification_token=body.verification_token,
+                hmac_provider=hmac_provider,
+            )
+        except InvalidVerificationTokenError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="invalid or expired verification token",
+            ) from None
+        contact_verified = True
+    else:
+        if not body.privacy_notice_acknowledged:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="privacy notice acknowledgment required",
+            )
 
     # 6. Create the Requested visit. Host resolution never blocks/branches
     # the response -- unresolved host_hint stays NULL (anti-enumeration).
@@ -159,8 +350,13 @@ async def submit_portal_visit_request(
         contact_value=body.contact_value,
         host_hint=body.host_hint,
         host_user_id=host_user_id,
+        purpose=body.purpose,
+        group_type=body.group_type,
+        expected_group_size=body.expected_group_size,
+        identity_verification_choice=body.identity_verification_choice,
+        contact_verified=contact_verified,
         privacy_notice_acknowledged=True,
-        privacy_notice_version=body.privacy_notice_version,
+        privacy_notice_version=privacy_notice_version,
         submission_dedup_key=dedup_key,
         correlation_id=correlation_id,
     )
@@ -181,3 +377,62 @@ async def submit_portal_visit_request(
 
     # 8. Uniform 202 + tracking_reference -- never host/other visit data.
     return PortalVisitRequestAccepted(tracking_reference=visit.tracking_reference)
+
+
+_TRACKING_NOT_FOUND_DETAIL = "not found"
+
+
+@router.get(
+    "/public/portal/{tenant_slug}/visit-requests/{tracking_reference}",
+    response_model=PortalTrackingStatus,
+)
+async def track_portal_visit_request(
+    tenant_slug: str,
+    tracking_reference: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    ip_limiter: TokenBucketRateLimiter = Depends(get_tracking_lookup_ip_limiter),
+    tenant_limiter: TokenBucketRateLimiter = Depends(get_tracking_lookup_tenant_limiter),
+) -> PortalTrackingStatus:
+    """US-13a no-account status lookup. Dedicated rate buckets (separate
+    Redis namespace from submission, so a lookup flood can't starve
+    submissions -- US-13 review S5). Returns status + the visitor's OWN
+    submitted details only: `host_hint` is the string the visitor typed,
+    NEVER the resolved employee's display_name, and NEVER a check-in code
+    (decision 2 / review B2). Uniform 404 across unknown reference /
+    wrong-tenant / malformed -- never distinguishable (anti-enumeration)."""
+    client_ip = resolve_client_ip(
+        remote_addr=request.client.host if request.client else None,
+        x_forwarded_for=request.headers.get("x-forwarded-for"),
+        trust_forwarded_for=settings.trust_forwarded_for,
+    )
+    if not await ip_limiter.check(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+    if not await tenant_limiter.check(tenant_slug):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+
+    tenant = await resolve_public_tenant(tenant_slug, session=session)
+
+    # Tenant-scoped by (RLS GUC + explicit predicate). A ref belonging to
+    # another tenant, an unknown ref, and a malformed string all simply fail
+    # to match -> the same uniform 404.
+    visit = (
+        await session.execute(
+            select(Visit).where(
+                Visit.tenant_id == tenant.id, Visit.tracking_reference == tracking_reference
+            )
+        )
+    ).scalar_one_or_none()
+    if visit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_TRACKING_NOT_FOUND_DETAIL
+        )
+
+    # Status + the visitor's OWN submitted details only. host_hint is the
+    # typed string (may be NULL); the resolved employee host_user_id and any
+    # check-in code are DELIBERATELY never exposed here.
+    return PortalTrackingStatus(
+        status=visit.status,
+        visitor_full_name=visit.visitor_full_name,
+        host_hint=visit.host_hint,
+    )

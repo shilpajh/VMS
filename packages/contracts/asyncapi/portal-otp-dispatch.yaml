@@ -1,0 +1,88 @@
+asyncapi: "3.0.0"
+info:
+  title: Smart VMS - portal.otp.dispatch (US-13a, ADR-004)
+  version: "1"
+  description: >
+    OTP-delivery INTENT, written by the Visitor & Visits domain inside the
+    same transaction as the portal_contact_verifications row's creation
+    (POST /public/portal/{slug}/otp/request). Relayed by the same
+    (not-yet-built, out of scope for US-13a) Integration worker as
+    visit-checkin-dispatch.yaml -- delivery (actual SMS/email send) is that
+    worker's job.
+
+    Envelope-encrypted (ADR-002 §5) -- the payload carries `contact_value`
+    (PII) AND the plaintext OTP (a bearer credential), the same sensitivity
+    class as visit.checkin_code.dispatch. Only the keyed-HMAC hash of the
+    OTP is ever persisted on portal_contact_verifications.otp_hash; the
+    plaintext lives only inside this encrypted blob.
+
+    Must be registered under the same standing PII-retention/purge GA gate
+    as visit.checkin_code.dispatch. `portal_contact_verifications` rows
+    (which this dispatch anchors on) are additionally purged by the ops-role
+    abandoned/expired-row cleanup (ADR-004).
+channels:
+  portal.otp.dispatch:
+    address: portal.otp.dispatch
+    messages:
+      PortalOtpDispatch:
+        $ref: "#/components/messages/PortalOtpDispatch"
+operations:
+  publishPortalOtpDispatch:
+    action: send
+    channel:
+      $ref: "#/channels/portal.otp.dispatch"
+    summary: >
+      Published when a visitor requests an OTP. idempotency_key is
+      deterministic per verification row --
+      sha256("portal.otp.dispatch:" + verification_id) -- where
+      verification_id is a FRESH UUID per otp/request, so a legitimate
+      resend re-dispatches (unlike the one-per-visit check-in-code dispatch
+      key). A redelivered message must dispatch that row's OTP exactly once.
+components:
+  messages:
+    PortalOtpDispatch:
+      name: PortalOtpDispatch
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - schema_version
+          - tenant_id
+          - verification_id
+          - contact_channel
+          - contact_value
+          - otp_code
+          - idempotency_key
+        properties:
+          schema_version: { type: string, const: "1" }
+          tenant_id: { type: string, format: uuid }
+          verification_id:
+            type: string
+            format: uuid
+            description: The portal_contact_verifications row id this dispatch anchors on.
+          contact_channel: { type: string, enum: [email, sms] }
+          contact_value:
+            type: string
+            description: PII -- never logged, at rest only as ciphertext.
+          otp_code:
+            type: string
+            description: >
+              The plaintext 6-digit OTP (a bearer credential). Only its keyed
+              HMAC is ever persisted (portal_contact_verifications.otp_hash);
+              this plaintext exists only transiently and inside this
+              envelope-encrypted payload.
+          idempotency_key:
+            type: string
+            description: Deterministic -- sha256("portal.otp.dispatch:" + verification_id).
+x-send-gate:
+  description: >
+    ADR-002 §4 adapted to a non-visits aggregate (ADR-004): before
+    dispatching, the relay worker MUST re-read the source
+    portal_contact_verifications row and refuse to send (marking the outbox
+    row `failed`, never `dispatched`) if the row is `superseded`, past
+    `otp_expires_at` (= the outbox row's not_valid_after), or already has
+    `consumed_at` set. Prevents delivering a stale/superseded OTP.
+  never_log: >
+    The relay worker MUST NOT log the decrypted payload -- not on success,
+    retry, or error. Errors log id, tenant_id, message_type,
+    idempotency_key, attempts only.

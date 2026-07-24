@@ -43,7 +43,16 @@ async def _reset_shared_ip_bucket():
     reset per migration fixture), so a bucket left partially-consumed by a
     previous run of this exact test (e.g. an interrupted run) would corrupt
     this test's own capacity assertion. Reset it before every run so the
-    bucket starts at a known, full state."""
+    bucket starts at a known, full state.
+
+    Also null the module-level `_redis_client` singleton so it rebinds to
+    this test's TestClient event loop -- otherwise, once US-13a's own
+    real-threshold rate-limit tests have run (each in its own loop), the
+    singleton is left bound to a closed loop and this endpoint call raises
+    "attached to a different loop"."""
+    import app.security.rate_limit as rl
+
+    rl._redis_client = None
     client = redis_async.from_url(settings.redis_url)
     async for key in client.scan_iter(match="ratelimit:portal:ip:*"):
         await client.delete(key)
@@ -106,6 +115,9 @@ def _submission_body() -> dict:
         "host_hint": None,
         "privacy_notice_acknowledged": True,
         "privacy_notice_version": "v1",
+        "purpose": "Business meeting",
+        "group_type": "individual",
+        "identity_verification_choice": "send_to_host",
         "turnstile_token": VALID_CAPTCHA_TOKEN,
     }
 
