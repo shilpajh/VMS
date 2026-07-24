@@ -110,3 +110,41 @@ Every testable acceptance criterion from the plan's Gherkin scenarios and Defini
 **Evidence:** the new exploit test was run and confirmed failing (vulnerability reproduced — forged token wrongly accepted, `pytest.raises(HTTPException)` reported "DID NOT RAISE") against the pre-fix code, then confirmed passing after the fix. Full suite: 79 passed (74 pre-existing + 5 new), 1 pre-existing unrelated failure (missing OpenAPI contract file, tracked separately as Blocking finding 2), 1 skipped — no regressions.
 
 This finding is now resolved pending independent re-verification at the next `/verify-story` pass (security-privacy-reviewer must confirm the fix independently; this remediation was performed by the builder, not by the reviewer).
+
+---
+
+## `/verify-story` re-run — independent re-verification (cycle 1 close-out)
+
+**Branch:** `feature/US-10` at `505bd16`. Both prior Blocking findings addressed by remediation commits `5a2ff65` (B1) and `505bd16` (contract file). Re-verified independently by fresh security-privacy-reviewer and qa-automation-engineer agents — neither trusted the builder's commit messages or the prior addendum as ground truth.
+
+### Track 1 re-verification (security-privacy-reviewer)
+
+**B1: RESOLVED — independently confirmed.** Traced the original exploit chain step-by-step against the current code: the expected issuer is now derived from the DB-stored, trusted `tenants.entra_tenant_id` (`app/auth/dependencies.py:101-114`), never from the token's own `iss`. `EntraTokenValidator.validate()` (`app/auth/entra.py:170-200`) takes `expected_issuer` as a required parameter, fetches JWKS only from that trusted URL, and rejects any token whose real `iss` doesn't match — the former tautology is gone. Confirmed production wiring (`get_token_validator()`, `dependencies.py:63-70`) uses this same path, not just tests. Ran `tests/test_entra_iss_pinning_security.py` + `tests/test_entra_auth.py` live against a real Postgres: 13 passed. Confirmed the strongest test (`test_forged_issuer_cross_tenant_impersonation_is_rejected`) hands the validator the attacker's own valid public key — proving rejection comes from issuer pinning, not a key-not-found shortcut. Full suite: 81 passed, 0 failed, no regressions.
+
+New-issue scan of both remediation commits: no new unscoped queries, no new logging of sensitive claims, `peek_unverified_tenant_id()` confirmed used only for candidate tenant lookup, never for authorization. One low-sensitivity note (not a finding): the two-step lookup returns distinguishable error messages for "unknown tenant" vs "invalid token," a minor enumeration surface — but `entra_tenant_id` is a non-secret, publicly-discoverable Azure AD tenant GUID, so this leaks nothing new.
+
+**Should-fix status:**
+- `SET LOCAL` f-string interpolation (`dependencies.py:134`, `tests/conftest.py:159`) — **still open**, untouched by either remediation commit. Non-blocking (safe by provenance), carry forward.
+- Untracked cross-tenant-writes test — **resolved**, now committed (`dff080e`), confirmed via `git log --diff-filter=A`.
+- US-07 retention/DPDP human sign-off — **still open**, unchanged, requires a human compliance owner, out of US-10 scope.
+
+**New process observation (not a security finding):** three US-11 docs-only commits (`a2c78d8`, `8550d24`, `7169385` — plan, ADR-002, review doc) landed on the `feature/US-10` branch. No code/schema/security surface touched. Flagged for the orchestrator/human at Gate 2 to decide whether to rebase off before merge; not a blocker.
+
+### Track 2 re-verification (qa-automation-engineer)
+
+**Missing `identity.yaml` contract: RESOLVED — independently confirmed.** Read all 334 lines against the real `app/api/identity.py`/`app/api/dtos/identity.py` line by line: `/me`, `/roles`, `/permissions`, and every `/tenants/{tenant_id}/users*` route match the actual code, including the 403-not-404 tenant-scope contract and 409-conflict cases. No discrepancies — a real contract, not a rubber-stamp file. `tests/test_openapi_contract_file.py` (both tests, including the previously-skipped companion) now pass.
+
+Backend suite run twice independently for stability: **81 passed, 0 failed, 0 skipped** both runs. Frontend: **8/8 passed**, `tsc -b` clean, `oxlint` clean. No regressions.
+
+Full 12-criterion table re-run fresh (see agent detail); all N/A / PASS / NOT-TESTABLE dispositions unchanged from the prior pass except items 1–2 above now closed. One informational note: ad-hoc `GET /me` timing this session (p50 68-123ms depending on cold/warm run) is noisier than the prior pass's 33ms figure — attributed to environment/container cold-start noise (no request-path code changed between the two measurements), not a code regression; still NOT TESTABLE against any real PRD threshold (none exists for SSO/RBAC).
+
+### Combined disposition — cycle 1 CLOSED
+
+**Blocking findings remaining: zero.** Both B1 and the missing contract file are independently re-verified as fixed, by different agents than the ones that implemented the fixes.
+
+**Should-fix carried forward (non-blocking):**
+- `SET LOCAL` bind-parameter hardening (defense-in-depth).
+- US-11 docs commits present on the `feature/US-10` branch — human should confirm before merge whether to rebase.
+- US-07 retention/purge registration + real DPDP sign-off — hard GA gate, requires a human compliance owner, cannot be closed by any agent.
+
+**Exit condition met:** zero Blocking findings AND every mapped acceptance criterion passes or is explicitly dispositioned (NOT TESTABLE items listed explicitly: load/perf against no PRD threshold, true multi-locale completeness, 72h erasure SLA deferred to US-07). **→ Ready for `/document-story`.**
