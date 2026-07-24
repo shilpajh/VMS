@@ -186,3 +186,37 @@ Backend suite run twice for stability: **191 passed, 1 failed (pre-existing, non
 - `packages/contracts/openapi/identity.yaml` missing on this branch — resolved upstream on `feature/US-10`, will clear on the next merge-forward; not a new item.
 
 **Result: 0 code-level Blocking findings, 1 governance-level Blocking finding → escalates to a human plan owner, not to `/execute-story`.**
+
+---
+
+## Governance blocker resolution — 2026-07-24
+
+**Human decision:** amend the plan retroactively to bring the portal UI into scope (rather than reverting `2a65ae0`/`23b7e47`), on condition that the portal-guardrail design-gate review AGENTS.md requires for any new unauthenticated-surface UI runs now, against the actual shipped code. `docs/plans/US-11.md` amended accordingly (new "Scope amendment — 2026-07-24" section under Part A, plus File map/Definition-of-Done additions).
+
+### Portal-UI retroactive design-gate review (security-privacy-reviewer, independent, read-only)
+
+**Scope:** the AGENTS.md public-portal guardrail (rate limiting + bot/abuse protection specified and enforced) applied to `apps/web/src/portal/Turnstile.tsx`, `PortalRequestForm.tsx`, `PortalPage.tsx` and their backend enforcement (`app/api/portal.py`, `app/security/captcha.py`), read cold as if before implementation — not a restatement of the prior verify-story pass's UI findings.
+
+**BLOCKING: none new.** B1 is out of this review's scope (already re-verified resolved; also unreachable from the unauthenticated portal path, which has no principal).
+
+**SHOULD-FIX:**
+1. Client Turnstile site key is hardcoded to Cloudflare's always-pass dev/test key (`Turnstile.tsx:8`) with no environment override (`VITE_TURNSTILE_SITE_KEY` absent from `apps/web/.env.example` and everywhere else) — client-side bot challenge isn't wired for any non-local environment. Pre-deploy config gap, not a merge blocker (this branch already can't deploy under the B1/release gate). Fix direction: expose via `import.meta.env.VITE_TURNSTILE_SITE_KEY`, default to the test key for local dev only, pair the deployed site key with the backend secret.
+2. Consent version is client-asserted (`PortalRequestForm.tsx:11`, hardcoded `'v1'`) and stored verbatim server-side (`portal.py:163`) rather than derived server-side from a live, displayed notice document. Sharpens the already-tracked consent-framework Should-fix; requires the human compliance owner, not approvable by an agent alone. Wording itself is not deceptive (no false "read it here" claim) — inadequate, not misleading.
+
+**NOTES:** server-side enforcement order confirmed correct by direct read (captcha-verify → rate-limit → tenant-resolution/`SET LOCAL` → dedup → privacy-ack → create/audit, `portal.py:112-163`) — the UI's disabled-submit-button gating is UX-only and the server re-verifies unconditionally regardless of what a client sends. No probing oracle in 429/400 responses (generic messages, no quota internals). Anti-enumeration confirmed strong from actual rendered behavior — every non-OK response (network error/400/404/422/429) renders one identical generic message; success renders only `tracking_reference`. No secret Turnstile key in frontend code (only the public test site key); `.env.example` carries no real secrets. No client-side PII persistence (`localStorage`/`console`/analytics/cookies` all absent from `apps/web/src/portal`). Displaying `tracking_reference` to the submitter raises (doesn't newly create) the urgency of the deferred lookup-by-reference entropy/rate-limit prerequisite — no live probe surface exists yet (no lookup endpoint).
+
+**Verdict:** the UI, as built, satisfies the AGENTS.md public-portal guardrail — rate limiting and bot/abuse protection are both specified and genuinely enforced server-side, in the correct order, ahead of any DB work. **The retroactive scope amendment is approved from the portal-guardrail perspective.** Neither Should-fix is blocking: item 1 closes naturally before the already-gated deploy; item 2 is the existing DPDP gap awaiting human compliance sign-off.
+
+### Combined disposition — governance blocker CLOSED
+
+**Governance-level Blocking finding: RESOLVED.** Plan amended (human decision) + mandatory portal-guardrail design-gate review completed with zero new Blocking findings.
+
+**Should-fix carried forward (updated, non-blocking):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to an actual document, server-authoritative version) — human compliance owner; now covers both the API-level gap and the UI's client-asserted version string.
+- `visit.requested` audit omits `policy_version` — explicit product/compliance decision.
+- No CI-enforced accessibility tooling (`jest-axe`/`jsx-a11y`) for the new portal UI — currently correct by construction only.
+- Turnstile client site key hardcoded to the dev/test value, no env override — pre-deploy config item.
+- `packages/contracts/openapi/identity.yaml` missing on this branch — resolved upstream on `feature/US-10`, clears on next merge-forward.
+
+**Result: 0 Blocking findings of any kind remain. Ready for `/document-story`**, subject to the standing B1/release merge gate (unchanged: neither `feature/US-10` nor `feature/US-11` may merge to a release branch until that gate's own conditions — already independently verified fixed — are formally signed off at Human Gate 2) and the two human-compliance-owner Should-fix items tracked as GA gates, not lost.
