@@ -1,0 +1,238 @@
+openapi: "3.1.0"
+info:
+  title: Smart VMS - Visitor & Visits API (US-11)
+  version: "1.0.0"
+  description: >
+    Portal (unauthenticated) visit-request submission and authenticated
+    host/reception visit endpoints. Reused verbatim from ADR-001's
+    tenancy/RLS pattern; the 403 (tenant scope) and 409 (invalid transition)
+    response declarations below are mandatory per .claude/rules/contracts.md.
+paths:
+  /public/portal/{tenant_slug}/visit-requests:
+    post:
+      summary: Submit a visitor pre-registration (public, unauthenticated)
+      operationId: submitPortalVisitRequest
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Optional. Dedup is tenant-scoped and content-hashed (a hash of
+            contact_value + host_hint), NOT the raw header value -- a
+            guessed/reused key can never return an unrelated submission's
+            tracking reference.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PortalVisitRequestCreate"
+      responses:
+        "202":
+          description: >
+            Accepted. Uniform response regardless of whether host_hint
+            resolved to a known host (anti-enumeration) -- never host or
+            other-visit data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalVisitRequestAccepted"
+        "400":
+          description: CAPTCHA verification failed. No DB write occurred.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: >
+            Unknown or suspended tenant_slug. Identical status+detail to
+            every other 404 this endpoint can produce (anti-enumeration).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: privacy_notice_acknowledged missing or false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Per-IP or per-tenant-slug rate limit exceeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /visits:
+    get:
+      summary: List visits (authenticated)
+      operationId: listVisits
+      description: >
+        A caller with view_visits (reception_security/tenant_admin) sees the
+        full tenant-scoped list; a caller with only approve_deny_visits
+        (host) sees only visits where they are the assigned host.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Visit" }
+        "401":
+          description: Missing/invalid/expired bearer token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /visits/{visit_id}:
+    get:
+      summary: Get a visit by id (authenticated)
+      operationId: getVisit
+      parameters:
+        - name: visit_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Visit" }
+        "403":
+          description: >
+            Uniform 403 whether the visit belongs to another tenant,
+            doesn't exist at all, or the caller lacks view_visits/ownership
+            -- NEVER 404, so cross-tenant existence is never an oracle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /visits/{visit_id}/approve:
+    post:
+      summary: Approve a Requested visit (authenticated host)
+      operationId: approveVisit
+      parameters:
+        - name: visit_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: >
+            Registered. A check-in code was issued (hash only persisted)
+            and dispatched asynchronously via the transactional outbox
+            (ADR-002) -- never returned in this response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Visit" }
+        "403":
+          description: >
+            Caller lacks approve_deny_visits, or is not this visit's
+            assigned host, or the visit is in another tenant/doesn't exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The visit is not currently Requested (already decided).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /visits/{visit_id}/deny:
+    post:
+      summary: Deny a Requested visit (authenticated host)
+      operationId: denyVisit
+      parameters:
+        - name: visit_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VisitDenyRequest"
+      responses:
+        "200":
+          description: Denied. No credential created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Visit" }
+        "403":
+          description: Same as approve.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The visit is not currently Requested (already decided).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: reason missing or empty.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  schemas:
+    PortalVisitRequestCreate:
+      type: object
+      required:
+        - visitor_full_name
+        - contact_channel
+        - contact_value
+        - privacy_notice_acknowledged
+        - privacy_notice_version
+        - turnstile_token
+      properties:
+        visitor_full_name: { type: string }
+        contact_channel: { type: string, enum: [email, sms] }
+        contact_value: { type: string }
+        host_hint: { type: string, nullable: true }
+        privacy_notice_acknowledged: { type: boolean }
+        privacy_notice_version: { type: string }
+        turnstile_token: { type: string }
+
+    PortalVisitRequestAccepted:
+      type: object
+      required: [tracking_reference]
+      properties:
+        tracking_reference: { type: string, pattern: "^REQ-\\d+$" }
+
+    VisitDenyRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    Visit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [Requested, Registered, AwaitingApproval, AwaitingDualSignoff, Held, CheckedIn, CheckedOut, Denied, Safe]
+        visitor_full_name: { type: string }
+        contact_channel: { type: string, enum: [email, sms] }
+        contact_value: { type: string }
+        host_hint: { type: string, nullable: true }
+        host_user_id: { type: string, format: uuid, nullable: true }
+        tracking_reference: { type: string }
+        denial_reason: { type: string, nullable: true }
+        correlation_id: { type: string, format: uuid }
+        decided_by_user_id: { type: string, format: uuid, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }

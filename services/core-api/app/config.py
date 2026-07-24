@@ -22,5 +22,28 @@ class Settings(BaseSettings):
     # from Key Vault / app configuration, never checked in.
     entra_api_audience: str = "api://smart-vms-core-api-dev-placeholder"
 
+    # --- US-11: public portal guardrails + outbox envelope encryption ---
+    # Cloudflare Turnstile secret key (siteverify). Placeholder for local
+    # dev -- never a real Turnstile account in this environment; production
+    # value comes from Key Vault, never checked in (US-11 review, Notes).
+    turnstile_secret_key: str = "dev-only-turnstile-secret-placeholder"
+    # Azure Key Vault key id/version used to envelope-encrypt outbox
+    # payloads (ADR-002 §5). Placeholder -- there is no real Key Vault
+    # access in this environment; app.crypto.envelope's production wiring
+    # is never exercised by any test here.
+    envelope_encryption_key_ref: str = "dev-only-key-vault-key-ref-placeholder"
+
+    # Public portal rate limiting (app/security/rate_limit.py). Per-IP:
+    # sustained ~5/min, burst up to 10. Per-tenant-slug: sustained ~60/min
+    # (US-11 plan/API contract delta).
+    portal_rate_limit_per_ip_capacity: int = 10
+    portal_rate_limit_per_ip_refill_per_minute: float = 5.0
+    portal_rate_limit_per_tenant_capacity: int = 60
+    portal_rate_limit_per_tenant_refill_per_minute: float = 60.0
+    # X-Forwarded-For is trusted ONLY behind a real trusted gateway/proxy
+    # that sets it -- default false for local dev, where a client could set
+    # this header itself to spoof its source IP (US-11 plan, task 7).
+    trust_forwarded_for: bool = False
+
 
 settings = Settings()

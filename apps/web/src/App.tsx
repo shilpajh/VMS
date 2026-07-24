@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { loginRequest } from './auth/msal'
 import { useCurrentUser } from './auth/useCurrentUser'
+import { PortalPage } from './portal/PortalPage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
@@ -81,13 +82,27 @@ function StaffSession() {
   return null
 }
 
+// The public portal path (/portal/{tenant_slug}) is unauthenticated and
+// deliberately bypasses the staff sign-in / health-check shell entirely --
+// it's the surface a visitor with no Smart VMS account ever sees.
+function usePortalTenantSlug(): string | null {
+  const match = /^\/portal\/([^/]+)\/?$/.exec(window.location.pathname)
+  return match ? match[1] : null
+}
+
 function App() {
   const { t } = useTranslation()
   const isAuthenticated = useIsAuthenticated()
+  const portalTenantSlug = usePortalTenantSlug()
   const { data, error, isLoading } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
+    enabled: !portalTenantSlug,
   })
+
+  if (portalTenantSlug) {
+    return <PortalPage tenantSlug={portalTenantSlug} />
+  }
 
   return (
     <main>

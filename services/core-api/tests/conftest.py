@@ -159,6 +159,20 @@ async def set_tenant_context(session, tenant_id: uuid.UUID) -> None:
     await session.execute(text(f"SET LOCAL app.current_tenant_id = '{tenant_id}'"))
 
 
+class AlwaysAllowRateLimiter:
+    """Test-only stand-in for app.security.rate_limit.TokenBucketRateLimiter,
+    used to override get_per_ip_rate_limiter/get_per_tenant_rate_limiter in
+    portal test modules that are not themselves testing rate-limiting
+    (tests/test_portal_rate_limit.py exercises the real Redis-backed
+    limiter directly) -- avoids every portal test in the whole suite
+    sharing one Redis-backed per-IP bucket keyed on TestClient's fixed
+    "testclient" host, which would otherwise make later tests flaky/failing
+    once the shared bucket empties."""
+
+    async def check(self, key: str, *, now: float | None = None) -> bool:
+        return True
+
+
 def assign_role(tenant_id: uuid.UUID, user_id: uuid.UUID, role_code: str) -> None:
     conn = psycopg2.connect(MIGRATOR_DSN)
     try:

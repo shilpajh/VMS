@@ -52,3 +52,171 @@ Relevant files:
 - `/home/shilpa/SmartVMS/services/core-api/app/domain/audit.py`, `/home/shilpa/SmartVMS/services/core-api/app/models/audit.py`
 - `/home/shilpa/SmartVMS/services/core-api/app/models/user.py` (`uq_users_id_tenant_id`)
 - `.claude/rules/security-privacy.md`, `.claude/rules/database-postgresql.md`, `.claude/rules/backend-python.md`, `.claude/rules/contracts.md`
+
+---
+
+# /verify-story — Track 1: Compliance/Security (post-implementation)
+
+**Reviewer:** security-privacy-reviewer (independent, read-only). **Branch:** `feature/US-11` (stacked on `feature/US-10`). **Scope:** post-implementation pass before Human Gate 2. Diff cold-read against the plan's file map and both ADRs — no scope creep found; the two additions not named verbatim in the file map (`submission_dedup_key` column, `enforce_public_rate_limits` helper) are in-scope mechanics for approved tasks 7/9. `graphify-out/graph.json` still doesn't exist — architecture-boundary check remains not-runnable, expected.
+
+## BLOCKING
+
+### B1 (carried forward, NOT resolved in US-11 — hard merge/ship gate, correctly preserved not dropped)
+US-11's three authenticated host endpoints (`app/api/visits.py` lines 62-67, 87-91, 113) all derive their RLS tenant scoping and host-ownership check from `get_current_principal`, which still carries US-10's open auth-bypass (US-10 review B1) — a forged token with an attacker-chosen `tid`/`oid` authenticates as any host in any tenant; RLS enforces a GUC value that is itself forged.
+
+**Precise status of the US-11-specific forged-token test** (`tests/test_visits_forged_token_cross_tenant.py`, read in full): rigorous and satisfies the Definition of Done, but proves isolation only *given a sound validator* (it overrides with `StaticJWKSProvider`, which doesn't carry the self-asserted-issuer defect). It does NOT and cannot prove B1 itself is fixed — the residual risk sits entirely in the shared `get_current_principal`/`HttpJWKSProvider`, covered only by the merge gate. **Neither `feature/US-10` nor `feature/US-11` may merge to a release branch or deploy until US-10 B1 is remediated.** This is the sole hard blocker for shipping; not a defect in US-11's own code.
+
+## SHOULD FIX
+
+1. **Content-hash submission dedup can return one submitter's `tracking_reference` to anyone who reproduces `contact_value`+`host_hint`.** Correctly tenant-scoped and content-hashed (not a raw client key) per the design decision — but low-entropy inputs mean a targeted guesser could retrieve someone else's reference. Low severity today (no lookup endpoint exists yet to make the reference useful) — **must be a hard prerequisite check for whatever story adds a lookup-by-reference endpoint.** Also: two legitimately distinct visits with identical contact+host collapse into one (functional side effect, not a security defect); dedup check runs before the privacy-notice acknowledgment gate.
+2. **Retention/purge for `visits`/`outbox_messages` PII confirmed still just a placeholder** (no `DELETE` grant, no purge job, no registration anywhere in the diff) — genuinely not silently assumed done. Same GA-gate status as US-10's `users` table; needs a human compliance owner. Orphaned NULL-host visits must be explicitly covered by that future purge.
+3. **Consent capture is a bare acknowledgment flag + version string, not the full versioned/linked-to-document consent framework** `security-privacy.md` describes. Satisfies the placeholder decision but is a genuine DPDP gap requiring Compliance-owner sign-off — not approvable by an agent alone.
+
+## NOTES
+- No automated-denial/biometric path exists — confirmed by reading the code, not assumed.
+- Command safety (idempotent async outbox write, deterministic globally-unique key, `not_valid_after` expiry) verified sound.
+- Envelope encryption independently verified: AES-256-GCM, fresh per-message DEK, ciphertext in `BYTEA`, never cleartext JSONB.
+- Never-log rule independently re-verified (source-scanner test re-run, including its injected-violation sanity check — not vacuously green).
+- Check-in code handled as a credential throughout: `secrets.token_urlsafe(24)`, only SHA-256 hash persisted, never returned by any endpoint.
+- Anti-enumeration verified: uniform portal response regardless of host resolution; uniform 404 for unknown/suspended tenant slug; uniform 403 for nonexistent vs. cross-tenant visit id.
+- CAPTCHA-before-tenant-resolution ordering confirmed correct (no timing oracle).
+- RBAC confirmed by reading the actual queries: `host` without `view_visits` genuinely sees only their own visits; `reception_security`/`tenant_admin` see the full tenant list.
+- RLS/migration hygiene sound: both tables `ENABLE`+`FORCE`, `USING`+`WITH CHECK`, fail-closed, tested `downgrade()`, no `DELETE` grant.
+- `visit.requested`'s audit omits `policy_version` (defensible — no RBAC policy governs an anonymous submission) — flagged for an explicit product/compliance decision, not a blocking gap.
+- All loop-state-flagged placeholders/process items (7-day check-in validity, 44-file count, non-TDD task 9) are real and honestly disclosed, none silently accepted; none affect a safety property.
+
+**Disposition:** One Blocking item (B1 — the still-open US-10 merge/ship gate, unchanged, correctly preserved). Three Should-fix items, two requiring a human compliance owner (retention registration, consent framework). US-11's own implementation is otherwise sound and matches the approved plan/ADRs.
+
+---
+
+# /verify-story — Track 2: Broader Test Suite (qa-automation-engineer)
+
+Independent re-run: **185 passed, 1 failed (pre-existing US-10 gap, unrelated), 1 skipped** — 183 confirmed matching the loop-state exactly before QA's own 2 added tests.
+
+### Criterion → Test → Result → Evidence (summary; full detail in the agent's report)
+1. **State-machine transitions** — PASS. Both directions genuinely tested; Gherkin Scenario 5's reconciliation (concrete `approve`-on-non-`Requested` → 409 call, not a literal `CheckedIn` route) implemented exactly as specified.
+2. **Tenant-isolation attempts** — PASS. New public-surface dedup scoping confirmed tenant-scoped; `test_visits_forged_token_cross_tenant.py` (8 tests, two forgery classes × all 3 routes) is a thorough, dedicated proof, not inherited from US-10.
+3. **Command idempotency — REAL GAP FOUND, not fixed by QA.** The outbox `idempotency_key` mechanism (ADR-002 §2) is sound. The **public portal's `Idempotency-Key` dedup has a real cross-actor information-disclosure bug**: `_submission_dedup_key` matches on submission content (`contact_value`+`host_hint`) alone — the client's actual header *value* is never checked, only its presence. A new test, `test_portal_dedup_cross_actor_leak.py::test_attacker_with_a_different_idempotency_key_value_can_still_fish_out_victims_tracking_reference`, **passes and proves the exploit**: an attacker who guesses a victim's `contact_value`+`host_hint` and supplies their own arbitrary `Idempotency-Key` retrieves the victim's real `tracking_reference` — directly through the same submission endpoint's own response, with no separate lookup endpoint needed. This is more immediately exploitable than the design-gate review's original characterization (which assumed a future lookup endpoint would be required to make the reference useful) — the disclosure happens right now, at submission time, via the endpoint this story ships. **Recommend escalating this from Should-fix to Blocking** given it's a proven, live information-disclosure defect, not a theoretical future risk. Fix direction (not applied): bind the dedup match to the actual client-supplied key value (e.g. include it in the hash), not just content.
+4. **Outage/replay reconciliation** — PASS as a contract test (relay worker itself correctly out of scope); `not_valid_after`-matches-`code_expires_at` test exercises the real encryption path with real data, not hollow.
+5. **Audit-event presence** — PASS, all three event types (`visit.requested`/`registered`/`denied`) verified against actual row content, including confirming `visit.denied`'s reason is genuinely coded (not a fragment of the free text).
+6. **E2E device simulators** — N/A, no kiosk/device surface.
+7. **Load/performance** — no PRD threshold applies; informational measurements taken (portal submission p50 34ms/p95 58ms; approval p50 43ms/p95 49ms). **Gap found and closed**: no prior test exercised the real configured rate-limit thresholds end-to-end; new test confirms exactly the configured capacity (10) succeeds before 429, stable across repeated runs. Configured values (`capacity=10`, `refill=5/min` per-IP; `capacity=60`, `refill=60/min` per-tenant) match the plan's suggested numbers.
+8. **Accessibility/Localization** — N/A, backend-only story.
+9. **72-hour erasure SLA** — NOT TESTABLE, placeholders only, no purge job built yet (same as US-10).
+10. **Avatar-jailbreak/resilience** — N/A.
+
+### Additional scrutiny (as directed)
+- The `submission_dedup_key` mechanism's tenant-scoping itself is correctly enforced — the gap is specifically that content alone (not the actual key value) determines the match, inverting the intended protection.
+- Task 9's non-TDD construction: coverage is comprehensive everywhere except exactly the adversarial-perspective gap above — consistent with what non-TDD construction tends to miss (validates stated behavior, not attacker behavior).
+- `CHECKIN_CODE_VALIDITY` placeholder: clearly named and commented; minor note that it's hardcoded rather than in `settings`, not a DoD defect.
+
+**Overall verdict:** Suite substantially passes and independently confirms the loop-state's report. One real, proven security gap found (dedup cross-actor leak) and reported, not fixed. One coverage gap found and closed (rate-limit e2e). No other blocking gaps.
+
+---
+
+## Combined /verify-story disposition
+
+**Blocking (must remediate before merge):**
+1. **B1** — US-10's auth-bypass finding, inherited via `get_current_principal`. Hard merge/ship gate for both branches. Not a US-11 code defect; not fixable inside US-11.
+2. **Dedup cross-actor tracking-reference leak** (elevated from the design-gate review's original Should-fix #1, per QA's demonstration that it's immediately exploitable through the story's own endpoint, not a deferred future risk). Fixable inside US-11's own code: bind the dedup match to the actual client-supplied `Idempotency-Key` value, not content alone.
+
+**Should-fix (non-blocking, track but don't need to hold the merge):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — needs a human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to a specific document, re-consent on version bump) — needs a human compliance owner.
+- `visit.requested` audit omits `policy_version` — defensible (no policy governs an anonymous submission), flag for an explicit product decision.
+- `CHECKIN_CODE_VALIDITY` hardcoded rather than configurable — minor, not a DoD defect.
+
+**Result: 2 Blocking findings → returns to `/execute-story` for remediation (cycle 1 of max 2).**
+
+---
+
+## Remediation cycle 1 — dedup cross-actor leak (Blocking item 2) fixed
+
+**Branch:** `feature/US-11`. **Scope:** this remediation addresses only Blocking item 2 (the public portal `Idempotency-Key` dedup cross-actor tracking-reference leak). Blocking item 1 (B1, the inherited US-10 auth-bypass merge/ship gate) is explicitly **not** addressed here — it is out of scope for this fix and remains open pending US-10's own remediation; this branch still may not merge to a release branch or deploy until US-10 B1 is resolved.
+
+**Fix applied:** `app/api/portal.py::_submission_dedup_key` now derives the dedup key as `sha256(idempotency_key + "\x1f" + contact_value + "\x1f" + host_hint)` — bound to the client's ACTUAL `Idempotency-Key` header value in addition to submission content, rather than content alone. The call site only computes/checks the dedup key when a header is actually present (`if idempotency_key:` → `dedup_key = ... if idempotency_key else None`), preserving the existing "no header, never dedups" behavior. Tenant scoping (post-`SET LOCAL`, `Visit.tenant_id == tenant.id`) is unchanged.
+
+**Files changed:**
+- `services/core-api/app/api/portal.py` — `_submission_dedup_key` signature and hash material; call site; docstring.
+- `services/core-api/app/models/visit.py` — `submission_dedup_key` column docstring updated to describe the two-factor binding (column type/constraint unchanged, no migration).
+- `services/core-api/tests/test_portal_dedup_cross_actor_leak.py` → renamed to `services/core-api/tests/test_portal_dedup_bound_to_client_key.py`; the exploit-proving assertion is inverted to a fix-proving assertion (attacker's differing key now produces a distinct `tracking_reference`, confirmed via a distinct-row count too); a same-key/same-content sanity test added; the exploit narrative preserved in the module docstring.
+- `services/core-api/tests/test_portal_submission.py` — docstring-only clarification on `test_idempotency_key_dedup_is_content_hashed_not_raw_client_key` to reflect the two-factor binding; no assertion changes; all four existing dedup tests (same-key-same-content dedups, same-key-different-content doesn't, per-tenant scoping, no-header-never-dedups) pass unmodified in behavior.
+
+**Migration:** none required. `submission_dedup_key` remains `String(64)` with the existing `uq_visits_tenant_dedup_key` unique constraint on `(tenant_id, submission_dedup_key)` — only the Python-side hash input changed, not the column type, nullability, or constraint shape.
+
+**Verification:** the renamed exploit test, inverted, now demonstrates the attacker's forged-key resubmission creates a separate visit with a distinct `tracking_reference` (previously it demonstrated the leak and passed). Full test suite re-run confirms no regression (see commit for exact pass count). Independent re-verification (a fresh `/verify-story` pass, not self-assessment by the implementing agent) is still required before this finding can be considered closed, per this project's verifier-first policy — this section records that the fix was applied and locally verified, not that it has been independently re-reviewed.
+
+---
+
+## `/verify-story` re-run — independent re-verification
+
+**Branch:** `feature/US-11` at `23b7e47`. Both prior Blocking findings addressed by: US-10's own remediation (`5a2ff65`, merged into this branch via `81cc624`) for B1, and commit `e9cd981` for the dedup cross-actor leak. Re-verified independently by fresh security-privacy-reviewer and qa-automation-engineer agents — neither trusted commit messages or the prior addendum as ground truth.
+
+### Track 1 re-verification (security-privacy-reviewer)
+
+**B1: RESOLVED for US-11's purposes.** Confirmed the pinned-issuer fix is genuinely present in the current file content on this branch (not just merged by commit hash): `app/auth/entra.py:170-192` takes `expected_issuer` as a caller-supplied argument, fetches JWKS only from that trusted URL, and rejects any mismatched `iss`; `app/auth/dependencies.py:114` derives it from the DB-stored `tenants.entra_tenant_id`. US-11's three host endpoints (`app/api/visits.py`) still correctly derive tenant scoping from `get_current_principal`, now on the fixed foundation. Commit `ea78cc9`'s mechanical `StaticJWKSProvider` re-keying did not weaken `test_visits_forged_token_cross_tenant.py` — all 11 forged-token/iss-pinning tests pass, run live.
+
+**Dedup fix (Blocking item 2): RESOLVED.** `app/api/portal.py:51-72` now hashes `idempotency_key + contact_value + host_hint` — the client's actual header value is genuinely part of the hash material, not just its presence. Read the renamed test's assertions directly (not just its name/green status): the attacker's differing key now produces a distinct `tracking_reference` and a distinct row (count==2), and the legitimate same-key/same-content case still dedups correctly.
+
+**NEW FINDING — portal-UI scope creep (governance-level Blocking, requires a human plan-gate decision):** Two commits (`2a65ae0`, `23b7e47`) landed on this branch *after* the prior `/verify-story` pass recorded "no scope creep found," adding a full React public-submission form (Tailwind, `PortalRequestForm.tsx`, `PortalPage.tsx`, `Turnstile.tsx`). `docs/plans/US-11.md:23` — approved at Human Gate 1 — explicitly fences this out: *"No actual portal/host UI screens... this story is backend-only."* The commit message self-justifies this as a Quick Flow follow-up, but it fails Quick Flow on two counts: it touches 6-7 files (threshold is ≤3), and it touches consent-surface (a privacy-notice acknowledgment control), which Quick Flow explicitly excludes. This is a plan-conformance violation under AGENTS.md's Spec-contradiction rule ("stop and go back to Plan — never silently work around it in code"), not a code-security defect.
+
+The code itself, evaluated independently, is security-clean: no PII sent to third parties or persisted client-side (checked for `console.`/`localStorage`/`sessionStorage`/analytics calls — none found), only a public Turnstile dev site-key embedded (no secret), anti-enumeration preserved (uniform success/error rendering), privacy-notice checkbox required client-side with independent server-side 422 enforcement. One privacy sub-note: the acknowledgment checkbox references "privacy notice (version v1)" but no actual notice document is linked or shown — visitors acknowledge a notice they cannot read, sharpening the DPDP salience of the already-open consent-framework Should-fix below.
+
+**Recommendation:** treat as blocking the merge as currently composed. Two resolutions, both requiring a human plan owner, neither an agent decision: (a) drop `2a65ae0`+`23b7e47` from this branch and land them under their own properly-planned UI story (which would also trigger the mandatory portal-guardrail design review for a new unauthenticated-surface UI, which never happened here), or (b) an explicit Human-Gate-1 scope amendment to `docs/plans/US-11.md` folding the UI in.
+
+`identity.yaml` absence reconfirmed expected (US-10's own deliverable, resolved on `feature/US-10` at `505bd16`, not yet merged forward to this branch — not a US-11 defect). All three prior Should-fix items (retention/purge registration, consent framework, `visit.requested` missing `policy_version`) reconfirmed still open, unchanged.
+
+### Track 2 re-verification (qa-automation-engineer)
+
+Backend suite run twice for stability: **191 passed, 1 failed (pre-existing, non-regressing — the `identity.yaml` gap, fix exists upstream on `feature/US-10`, not yet merged forward), 1 skipped**. Tenant-isolation/forged-token coverage re-confirmed 18/18 across `test_visits_forged_token_cross_tenant.py` + US-10's tenant-isolation suites. Dedup fix independently re-verified by reading the inverted test's assertions directly (distinct reference + distinct row count for a differing key; same-key/content still dedups).
+
+**Criterion #8 (Accessibility) disposition changed** from the prior pass's "N/A, backend-only" — no longer accurate now that a real UI exists. Re-tested fresh: all form inputs have correctly associated labels (verified via `getByLabelText` in the component test, which fails on broken association), error state uses `role="alert"` not color-only, all user-facing strings route through `t()` matching US-10's established i18n pattern. An ad hoc `jsx-a11y` lint pass found zero issues. **Gap stated explicitly, not silently dropped:** no `jest-axe`/`axe-core` dependency and no `jsx-a11y` plugin enabled in the checked-in `.oxlintrc.json` — accessibility is currently correct by construction, not CI-enforced. Frontend suite: 11/11 passed, `tsc -b` clean, `oxlint` clean. Client-side check confirmed the new form makes exactly one network call (the submission POST) — no separate enumeration oracle, no CAPTCHA bypass (server-side enforcement unchanged and still the actual gate).
+
+### Combined disposition — cycle 1 status
+
+**Code-level Blocking findings: zero.** Both B1 and the dedup cross-actor leak are independently re-verified as fixed, by different agents than the ones that implemented the fixes.
+
+**Governance-level Blocking finding: one, NEW.** Portal-UI scope creep (`2a65ae0`, `23b7e47`) past the Human-Gate-1-approved, explicitly backend-only plan. This is not remediable by looping back to `/execute-story` for a code fix — per AGENTS.md's Spec-contradiction rule, it requires a human plan-gate decision (drop the commits into their own properly-reviewed UI story, or amend the approved plan). **This finding does not proceed to `/document-story` until a human resolves it.**
+
+**Should-fix carried forward (non-blocking):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — needs a human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to an actual document) — needs a human compliance owner; now more visible via the new UI's unlinked "privacy notice" reference.
+- `visit.requested` audit omits `policy_version` — needs an explicit product/compliance decision.
+- No CI-enforced accessibility tooling (`jest-axe`/`jsx-a11y`) for the new portal UI — currently correct by construction only.
+- `packages/contracts/openapi/identity.yaml` missing on this branch — resolved upstream on `feature/US-10`, will clear on the next merge-forward; not a new item.
+
+**Result: 0 code-level Blocking findings, 1 governance-level Blocking finding → escalates to a human plan owner, not to `/execute-story`.**
+
+---
+
+## Governance blocker resolution — 2026-07-24
+
+**Human decision:** amend the plan retroactively to bring the portal UI into scope (rather than reverting `2a65ae0`/`23b7e47`), on condition that the portal-guardrail design-gate review AGENTS.md requires for any new unauthenticated-surface UI runs now, against the actual shipped code. `docs/plans/US-11.md` amended accordingly (new "Scope amendment — 2026-07-24" section under Part A, plus File map/Definition-of-Done additions).
+
+### Portal-UI retroactive design-gate review (security-privacy-reviewer, independent, read-only)
+
+**Scope:** the AGENTS.md public-portal guardrail (rate limiting + bot/abuse protection specified and enforced) applied to `apps/web/src/portal/Turnstile.tsx`, `PortalRequestForm.tsx`, `PortalPage.tsx` and their backend enforcement (`app/api/portal.py`, `app/security/captcha.py`), read cold as if before implementation — not a restatement of the prior verify-story pass's UI findings.
+
+**BLOCKING: none new.** B1 is out of this review's scope (already re-verified resolved; also unreachable from the unauthenticated portal path, which has no principal).
+
+**SHOULD-FIX:**
+1. Client Turnstile site key is hardcoded to Cloudflare's always-pass dev/test key (`Turnstile.tsx:8`) with no environment override (`VITE_TURNSTILE_SITE_KEY` absent from `apps/web/.env.example` and everywhere else) — client-side bot challenge isn't wired for any non-local environment. Pre-deploy config gap, not a merge blocker (this branch already can't deploy under the B1/release gate). Fix direction: expose via `import.meta.env.VITE_TURNSTILE_SITE_KEY`, default to the test key for local dev only, pair the deployed site key with the backend secret.
+2. Consent version is client-asserted (`PortalRequestForm.tsx:11`, hardcoded `'v1'`) and stored verbatim server-side (`portal.py:163`) rather than derived server-side from a live, displayed notice document. Sharpens the already-tracked consent-framework Should-fix; requires the human compliance owner, not approvable by an agent alone. Wording itself is not deceptive (no false "read it here" claim) — inadequate, not misleading.
+
+**NOTES:** server-side enforcement order confirmed correct by direct read (captcha-verify → rate-limit → tenant-resolution/`SET LOCAL` → dedup → privacy-ack → create/audit, `portal.py:112-163`) — the UI's disabled-submit-button gating is UX-only and the server re-verifies unconditionally regardless of what a client sends. No probing oracle in 429/400 responses (generic messages, no quota internals). Anti-enumeration confirmed strong from actual rendered behavior — every non-OK response (network error/400/404/422/429) renders one identical generic message; success renders only `tracking_reference`. No secret Turnstile key in frontend code (only the public test site key); `.env.example` carries no real secrets. No client-side PII persistence (`localStorage`/`console`/analytics/cookies` all absent from `apps/web/src/portal`). Displaying `tracking_reference` to the submitter raises (doesn't newly create) the urgency of the deferred lookup-by-reference entropy/rate-limit prerequisite — no live probe surface exists yet (no lookup endpoint).
+
+**Verdict:** the UI, as built, satisfies the AGENTS.md public-portal guardrail — rate limiting and bot/abuse protection are both specified and genuinely enforced server-side, in the correct order, ahead of any DB work. **The retroactive scope amendment is approved from the portal-guardrail perspective.** Neither Should-fix is blocking: item 1 closes naturally before the already-gated deploy; item 2 is the existing DPDP gap awaiting human compliance sign-off.
+
+### Combined disposition — governance blocker CLOSED
+
+**Governance-level Blocking finding: RESOLVED.** Plan amended (human decision) + mandatory portal-guardrail design-gate review completed with zero new Blocking findings.
+
+**Should-fix carried forward (updated, non-blocking):**
+- Retention/purge registration for `visits`/`outbox_messages` PII — human compliance owner.
+- Consent/privacy-notice framework (versioned, linked to an actual document, server-authoritative version) — human compliance owner; now covers both the API-level gap and the UI's client-asserted version string.
+- `visit.requested` audit omits `policy_version` — explicit product/compliance decision.
+- No CI-enforced accessibility tooling (`jest-axe`/`jsx-a11y`) for the new portal UI — currently correct by construction only.
+- Turnstile client site key hardcoded to the dev/test value, no env override — pre-deploy config item.
+- `packages/contracts/openapi/identity.yaml` missing on this branch — resolved upstream on `feature/US-10`, clears on next merge-forward.
+
+**Result: 0 Blocking findings of any kind remain. Ready for `/document-story`**, subject to the standing B1/release merge gate (unchanged: neither `feature/US-10` nor `feature/US-11` may merge to a release branch until that gate's own conditions — already independently verified fixed — are formally signed off at Human Gate 2) and the two human-compliance-owner Should-fix items tracked as GA gates, not lost.
