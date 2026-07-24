@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2 } from 'lucide-react'
@@ -46,6 +46,7 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
   // Client-side mirror of US-13a's DTO validator (group -> size required), so
   // a group submission never round-trips to a guaranteed 422.
   const [groupSizeError, setGroupSizeError] = useState(false)
+  const successRef = useRef<HTMLDivElement>(null)
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -64,8 +65,19 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
       }),
   })
 
+  // Move visible keyboard focus to the success message once it replaces the
+  // form (the submit button unmounts, so focus would otherwise revert to
+  // <body>) -- WCAG 2.4.3, the same fix CheckinPage carries (US-13b verify
+  // Should-fix; the DoD committed to matching CheckinPage's focus handling).
+  useEffect(() => {
+    if (mutation.isSuccess) successRef.current?.focus()
+  }, [mutation.isSuccess])
+
   const handleSubmit = () => {
-    if (groupType === 'group' && !groupSize.trim()) {
+    // Mirror US-13a's DTO validator: group requires a size >= 1 (an empty
+    // value OR a non-positive number both block, so the client fully matches
+    // the backend's `ge=1`, not just "non-empty" -- US-13b verify Note).
+    if (groupType === 'group' && Number(groupSize) < 1) {
       setGroupSizeError(true)
       return
     }
@@ -81,6 +93,8 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
 
       {mutation.isSuccess ? (
         <div
+          ref={successRef}
+          tabIndex={-1}
           role="status"
           aria-label={t('portal.successLabel', 'Visit request submitted')}
           className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center my-auto"

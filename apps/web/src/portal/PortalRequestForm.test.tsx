@@ -81,7 +81,13 @@ describe('PortalRequestForm', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(screen.getByText(/enter your group size/i)).toBeInTheDocument()
 
-    // Provide a size -> now it submits with expected_group_size.
+    // A non-positive size is also blocked (client mirrors the backend's ge=1).
+    await user.type(screen.getByLabelText(/group size/i), '0')
+    await user.click(screen.getByRole('button', { name: /submit request/i }))
+    expect(fetchSpy).not.toHaveBeenCalled()
+    await user.clear(screen.getByLabelText(/group size/i))
+
+    // Provide a valid size -> now it submits with expected_group_size.
     await user.type(screen.getByLabelText(/group size/i), '3')
     await user.click(screen.getByRole('button', { name: /submit request/i }))
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled())

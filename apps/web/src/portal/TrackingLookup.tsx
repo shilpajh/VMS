@@ -47,7 +47,7 @@ export function TrackingLookup({ tenantSlug }: TrackingLookupProps) {
             required
             value={reference}
             onChange={(event) => setReference(event.target.value)}
-            placeholder="REQ-000000000000"
+            placeholder={t('portal.trackingPlaceholder', 'REQ-000000000000')}
             className={inputClasses}
           />
         </label>

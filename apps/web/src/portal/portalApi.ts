@@ -38,6 +38,11 @@ export interface PortalTrackingStatus {
 
 // One error type for every non-OK response -- the UI renders a single generic
 // message regardless of status (anti-enumeration; the server already decided).
+//
+// `httpStatus` is retained for logging/debugging ONLY. Do NOT branch any
+// user-facing copy on it: distinguishing 404 vs 422 vs 429 to the visitor
+// would reintroduce the enumeration oracle US-13a's uniform responses close
+// (US-13b verify, Note). The components deliberately never read it.
 export class PortalApiError extends Error {
   readonly httpStatus: number
   constructor(httpStatus: number) {
