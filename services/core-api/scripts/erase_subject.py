@@ -53,6 +53,19 @@ async def _run(args: argparse.Namespace, *, execute: bool) -> dict[str, int]:
     return counts
 
 
+def _mask_subject(*, staff_email: str | None, channel: str | None, value: str | None) -> str:
+    """A human-recognizable but NON-PII label for console/log output. The raw
+    contact / staff email is NEVER echoed: an ops script's stdout may be
+    captured to a shared runbook / CI log, and the DoD ("no PII in logs") and
+    .claude/rules/security-privacy.md ("Never log PII") apply to that path
+    just as much as to the audit row -- which already uses a keyed HMAC. Only
+    a single leading character survives, enough for the operator (who typed
+    the value) to recognize their own request, not enough to be PII."""
+    if staff_email:
+        return f"staff:{staff_email[:1]}***"
+    return f"{channel}:{value[:1]}***"
+
+
 def _format(counts: dict[str, int], *, execute: bool, slug: str, subject: str) -> str:
     parts = ", ".join(f"{v} {k}" for k, v in counts.items())
     if execute:
@@ -81,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         except ActivationRefused as exc:
             parser.error(str(exc))
 
-    subject = args.staff_email if is_staff else f"{args.channel}:{args.value}"
+    subject = _mask_subject(staff_email=args.staff_email, channel=args.channel, value=args.value)
     try:
         counts = asyncio.run(_run(args, execute=args.execute))
     except OnSiteErasureRefused as exc:
