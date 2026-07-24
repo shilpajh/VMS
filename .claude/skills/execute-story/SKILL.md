@@ -40,3 +40,5 @@ Commit to the feature branch with a Conventional Commit message referencing the 
 
 ## Spec-contradiction rule
 If a task reveals the plan itself was wrong, stop and ask — go back to /plan-story, get the correction approved, then resume. Never quietly work around it in code.
+
+If the HUMAN directs a mid-execution change that contradicts the approved plan (e.g. "actually, make it look like X" reversing a Gate-1 decision), that's a legitimate human amendment — but record it in the plan doc as a clearly-labeled Gate-1 amendment *in the same commit or the next one*, before continuing. Changing only the code leaves the plan and the code disagreeing, which reads to the next reviewer as a silent scope violation (US-13b: a human-directed restyle reversed a Gate-1 decision and wasn't documented until /verify-story flagged the drift). A human-directed change still needs the plan updated, not just the code.
