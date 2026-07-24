@@ -70,6 +70,11 @@ class PortalContactVerification(Base):
     verification_token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Reserved. `consume_verification_token` DELETEs the row on success
+    # (single-use enforced by row absence, PII removed immediately -- US-13a
+    # verify qa #1), so no request path currently writes this; kept as a
+    # nullable reserved column, and the `consumed_at IS NULL` predicates in
+    # otp.py remain as harmless defensive filters.
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

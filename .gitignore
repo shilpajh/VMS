@@ -16,3 +16,10 @@ apps/kiosk/.dart_tool/
 # Env
 .env
 apps/web/.env
+
+# Windows alternate-data-stream cruft
+*:Zone.Identifier
+
+# Reference/design source material (not code; kept locally, not versioned)
+*.docx
+visitor_management_prototype*.jsx

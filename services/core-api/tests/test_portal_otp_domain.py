@@ -236,6 +236,47 @@ async def test_token_is_single_use_and_contact_scoped(app_session, hmac_provider
         )
 
 
+async def test_two_live_rows_do_not_break_verify_and_newest_wins(app_session, hmac_provider) -> None:
+    """N-1 regression: two live (non-superseded) rows for one contact -- as a
+    concurrent-request burst in separate transactions can momentarily leave --
+    must NOT make verify raise MultipleResultsFound (-> 500). It resolves
+    against the newest row (by created_at). Both rows are constructed directly
+    with explicit distinct timestamps (a real concurrent burst commits at
+    distinct times; a single test transaction's func.now() would collide)."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.crypto.hmac_hash import hmac_hash
+    from app.models import PortalContactVerification as _PCV
+
+    tenant_id = await _mk_tenant(app_session)
+    now = datetime.now(timezone.utc)
+    older = _PCV(
+        tenant_id=tenant_id, contact_channel=CHANNEL, contact_value="jane@example.com",
+        otp_hash=hmac_hash("111111", hmac_provider), otp_expires_at=now + timedelta(minutes=5),
+        privacy_notice_version="v1", created_at=now - timedelta(seconds=2),
+    )
+    newer = _PCV(
+        tenant_id=tenant_id, contact_channel=CHANNEL, contact_value="jane@example.com",
+        otp_hash=hmac_hash("222222", hmac_provider), otp_expires_at=now + timedelta(minutes=5),
+        privacy_notice_version="v1", created_at=now,
+    )
+    app_session.add_all([older, newer])
+    await app_session.flush()
+
+    # The OLDER code does not win (newest row is resolved)...
+    with pytest.raises(InvalidOtpError):
+        await verify_otp_and_issue_token(
+            app_session, tenant_id=tenant_id, contact_channel=CHANNEL,
+            contact_value="jane@example.com", otp_code="111111", hmac_provider=hmac_provider,
+        )
+    # ...the NEWER code verifies, and crucially verify never raised MultipleResultsFound.
+    token = await verify_otp_and_issue_token(
+        app_session, tenant_id=tenant_id, contact_channel=CHANNEL,
+        contact_value="jane@example.com", otp_code="222222", hmac_provider=hmac_provider,
+    )
+    assert token
+
+
 async def test_verify_writes_pii_free_audit_event(app_session, hmac_provider) -> None:
     from app.models import AuditEvent
 

@@ -20,7 +20,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -117,18 +117,27 @@ async def _current_row(
     session: AsyncSession, tenant_id: uuid.UUID, contact_channel: str, contact_value: str
 ) -> PortalContactVerification | None:
     """The single current (non-superseded, non-consumed) OTP row for this
-    contact, if any -- verify always resolves against exactly this one."""
+    contact, if any -- verify always resolves against exactly this one.
+
+    `ORDER BY created_at DESC LIMIT 1` + `.first()` (not `scalar_one_or_none`)
+    so a burst of concurrent otp/request calls -- which can momentarily leave
+    two live rows before each sees the other's supersede -- resolves to the
+    newest rather than raising MultipleResultsFound -> 500 (US-13a verify,
+    Note N-1). The newest row is the one the visitor was most recently sent."""
     return (
         await session.execute(
-            select(PortalContactVerification).where(
+            select(PortalContactVerification)
+            .where(
                 PortalContactVerification.tenant_id == tenant_id,
                 PortalContactVerification.contact_channel == contact_channel,
                 PortalContactVerification.contact_value == contact_value,
                 PortalContactVerification.superseded.is_(False),
                 PortalContactVerification.consumed_at.is_(None),
             )
+            .order_by(PortalContactVerification.created_at.desc())
+            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
 
 async def verify_otp_and_issue_token(
@@ -165,9 +174,15 @@ async def verify_otp_and_issue_token(
         # guess) or a non-matching sentinel id (affecting nothing) with the
         # same WHERE shape either way; race-safe on the attempt count.
         target_id = row.id if (row is not None and usable) else uuid.uuid4()
+        # Explicit tenant_id predicate (defense-in-depth on top of FORCE RLS)
+        # so every write in this module is uniformly tenant-scoped and none
+        # relies on RLS as its sole guard (US-13a verify, Should-fix SF-2).
         await session.execute(
             update(PortalContactVerification)
-            .where(PortalContactVerification.id == target_id)
+            .where(
+                PortalContactVerification.id == target_id,
+                PortalContactVerification.tenant_id == tenant_id,
+            )
             .values(otp_attempts=PortalContactVerification.otp_attempts + 1)
         )
         # If this wrong guess just exhausted a real OTP's attempts, record a
@@ -217,23 +232,32 @@ async def consume_verification_token(
 ) -> str:
     """Single-use consume, scoped to the exact `(tenant, channel,
     contact_value)` the token was issued against. Race-safe: a guarded
-    UPDATE stamps `consumed_at` only if it is still NULL and unexpired;
-    rowcount 0 -> already consumed / expired / mismatch -> uniform error.
-    Returns the row's `privacy_notice_version` (copied onto the visit)."""
+    `DELETE ... RETURNING` removes the row iff it is unexpired and still
+    present; rowcount 0 -> already consumed (row gone) / expired / mismatch
+    -> uniform error. Returns the row's `privacy_notice_version` (copied
+    onto the visit).
+
+    DELETE, not an UPDATE-consumed_at stamp (US-13a verify, qa finding #1):
+    the row has no post-consume value, and deleting it on the happy path
+    removes `contact_value` PII immediately rather than letting it linger
+    until US-07's abandoned-row purge -- minimizing retained PII and using
+    the `vms_app` DELETE grant the 0004 migration provisioned. Single-use is
+    now enforced by row absence (a replay finds nothing), which is why the
+    submission endpoint runs its Idempotency-Key dedup BEFORE this consume:
+    a legitimate idempotent retry returns the existing visit's reference and
+    never reaches here (portal.py)."""
     now = datetime.now(timezone.utc)
     token_hash = hmac_hash(verification_token, hmac_provider)
 
     result = await session.execute(
-        update(PortalContactVerification)
+        delete(PortalContactVerification)
         .where(
             PortalContactVerification.tenant_id == tenant_id,
             PortalContactVerification.contact_channel == contact_channel,
             PortalContactVerification.contact_value == contact_value,
             PortalContactVerification.verification_token_hash == token_hash,
-            PortalContactVerification.consumed_at.is_(None),
             PortalContactVerification.verification_token_expires_at > now,
         )
-        .values(consumed_at=now)
         .returning(PortalContactVerification.privacy_notice_version)
     )
     row = result.first()
