@@ -33,6 +33,7 @@ from app.api.dtos.visits import (
     PortalOtpRequestCreate,
     PortalOtpVerifyAccepted,
     PortalOtpVerifyRequest,
+    PortalTrackingStatus,
     PortalVisitRequestAccepted,
     PortalVisitRequestCreate,
 )
@@ -59,6 +60,8 @@ from app.security.rate_limit import (
     get_otp_verify_ip_limiter,
     get_per_ip_rate_limiter,
     get_per_tenant_rate_limiter,
+    get_tracking_lookup_ip_limiter,
+    get_tracking_lookup_tenant_limiter,
     resolve_client_ip,
 )
 
@@ -374,3 +377,62 @@ async def submit_portal_visit_request(
 
     # 8. Uniform 202 + tracking_reference -- never host/other visit data.
     return PortalVisitRequestAccepted(tracking_reference=visit.tracking_reference)
+
+
+_TRACKING_NOT_FOUND_DETAIL = "not found"
+
+
+@router.get(
+    "/public/portal/{tenant_slug}/visit-requests/{tracking_reference}",
+    response_model=PortalTrackingStatus,
+)
+async def track_portal_visit_request(
+    tenant_slug: str,
+    tracking_reference: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    ip_limiter: TokenBucketRateLimiter = Depends(get_tracking_lookup_ip_limiter),
+    tenant_limiter: TokenBucketRateLimiter = Depends(get_tracking_lookup_tenant_limiter),
+) -> PortalTrackingStatus:
+    """US-13a no-account status lookup. Dedicated rate buckets (separate
+    Redis namespace from submission, so a lookup flood can't starve
+    submissions -- US-13 review S5). Returns status + the visitor's OWN
+    submitted details only: `host_hint` is the string the visitor typed,
+    NEVER the resolved employee's display_name, and NEVER a check-in code
+    (decision 2 / review B2). Uniform 404 across unknown reference /
+    wrong-tenant / malformed -- never distinguishable (anti-enumeration)."""
+    client_ip = resolve_client_ip(
+        remote_addr=request.client.host if request.client else None,
+        x_forwarded_for=request.headers.get("x-forwarded-for"),
+        trust_forwarded_for=settings.trust_forwarded_for,
+    )
+    if not await ip_limiter.check(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+    if not await tenant_limiter.check(tenant_slug):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limit exceeded")
+
+    tenant = await resolve_public_tenant(tenant_slug, session=session)
+
+    # Tenant-scoped by (RLS GUC + explicit predicate). A ref belonging to
+    # another tenant, an unknown ref, and a malformed string all simply fail
+    # to match -> the same uniform 404.
+    visit = (
+        await session.execute(
+            select(Visit).where(
+                Visit.tenant_id == tenant.id, Visit.tracking_reference == tracking_reference
+            )
+        )
+    ).scalar_one_or_none()
+    if visit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_TRACKING_NOT_FOUND_DETAIL
+        )
+
+    # Status + the visitor's OWN submitted details only. host_hint is the
+    # typed string (may be NULL); the resolved employee host_user_id and any
+    # check-in code are DELIBERATELY never exposed here.
+    return PortalTrackingStatus(
+        status=visit.status,
+        visitor_full_name=visit.visitor_full_name,
+        host_hint=visit.host_hint,
+    )
