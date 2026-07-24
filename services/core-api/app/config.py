@@ -84,5 +84,25 @@ class Settings(BaseSettings):
     otp_max_attempts: int = 5
     verification_token_ttl_seconds: int = 900  # 15 min
 
+    # --- US-07: retention purge + right-to-erasure ---
+    # Purge/erasure connection: the dedicated NOBYPASSRLS `vms_purge` role
+    # (ADR-005). It is *subject to* RLS -- FORCE RLS structurally scopes every
+    # statement to the per-tenant GUC even if a predicate is forgotten, which
+    # is the whole reason irreversible purge/erasure does NOT run as
+    # `vms_migrator` (BYPASSRLS). Async (asyncpg) driver, like the request path.
+    purge_database_url: str = (
+        "postgresql+asyncpg://vms_purge:dev-only-not-for-real-secrets@localhost:5432/vms"
+    )
+    # Master activation guard (Constraint 2 -- human-gated prod activation).
+    # Default OFF: the mechanism exists and is fully tested, but a real purge
+    # against production data only runs once a compliance owner ratifies the
+    # retention windows and flips this on out-of-band. `--execute` refuses
+    # while this is False.
+    retention_purge_enabled: bool = False
+    # Environment name -- the ops scripts assert this is NOT "production"
+    # before any `--execute`, so an accidental prod run needs BOTH this flip
+    # and retention_purge_enabled, never a single misconfiguration.
+    app_environment: str = "local"
+
 
 settings = Settings()
