@@ -53,7 +53,48 @@ describe('PortalRequestForm', () => {
       host_hint: 'rahul@acme',
       privacy_notice_acknowledged: true,
       turnstile_token: 'fake-turnstile-token',
+      // US-13a now REQUIRES these three (default individual submission) --
+      // omitting them was the 422 bug US-13b fixes.
+      purpose: expect.any(String),
+      group_type: 'individual',
+      identity_verification_choice: expect.any(String),
     })
+    expect(body.purpose.length).toBeGreaterThan(0)
+  })
+
+  it('requires a group size before submitting when group type is "group"', async () => {
+    const user = userEvent.setup()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ tracking_reference: 'REQ-1' }), { status: 202 }),
+    )
+
+    renderForm()
+
+    await user.type(screen.getByLabelText(/your full name/i), 'Jane Visitor')
+    await user.type(screen.getByLabelText(/email address/i), 'jane@example.com')
+    await user.click(screen.getByLabelText(/group visitors/i))
+    await user.click(screen.getByRole('checkbox', { name: /privacy notice/i }))
+    await user.click(screen.getByRole('button', { name: /complete-turnstile-challenge/i }))
+    await user.click(screen.getByRole('button', { name: /submit request/i }))
+
+    // Blocked: no fetch, and the group-size required error is shown.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(screen.getByText(/enter your group size/i)).toBeInTheDocument()
+
+    // A non-positive size is also blocked (client mirrors the backend's ge=1).
+    await user.type(screen.getByLabelText(/group size/i), '0')
+    await user.click(screen.getByRole('button', { name: /submit request/i }))
+    expect(fetchSpy).not.toHaveBeenCalled()
+    await user.clear(screen.getByLabelText(/group size/i))
+
+    // Provide a valid size -> now it submits with expected_group_size.
+    await user.type(screen.getByLabelText(/group size/i), '3')
+    await user.click(screen.getByRole('button', { name: /submit request/i }))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as RequestInit).body as string,
+    )
+    expect(body).toMatchObject({ group_type: 'group', expected_group_size: 3 })
   })
 
   it('disables submit until the Turnstile challenge is completed', async () => {

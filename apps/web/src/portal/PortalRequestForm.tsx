@@ -1,46 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2 } from 'lucide-react'
 import { TurnstileWidget } from './Turnstile'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+import { submitVisitRequest } from './portalApi'
 
 // The privacy-notice version this build's form was written against (US-11
 // plan: a placeholder pending real compliance sign-off, not final policy).
 const PRIVACY_NOTICE_VERSION = 'v1'
 
-interface PortalSubmissionResponse {
-  tracking_reference: string
-}
+// Visit purposes offered to the visitor. `purpose` is a required free-string
+// on US-13a's DTO; a fixed select keeps submissions clean and the field
+// non-empty. (Mirrors the prototype's purpose list.)
+const PURPOSES = [
+  'Business meeting',
+  'Interview',
+  'Contractor work',
+  'Delivery',
+  'Vendor visit',
+] as const
 
-interface PortalSubmissionError {
-  status: number
-}
-
-async function submitPortalRequest(
-  tenantSlug: string,
-  body: {
-    visitor_full_name: string
-    contact_channel: 'email' | 'sms'
-    contact_value: string
-    host_hint: string
-    privacy_notice_acknowledged: boolean
-    privacy_notice_version: string
-    turnstile_token: string
-  },
-): Promise<PortalSubmissionResponse> {
-  const response = await fetch(`${API_BASE_URL}/public/portal/${tenantSlug}/visit-requests`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) {
-    const error: PortalSubmissionError = { status: response.status }
-    throw error
-  }
-  return response.json()
-}
+type GroupType = 'individual' | 'group'
+type IdentityChoice = 'upload_now' | 'send_to_host'
 
 const inputClasses =
   'mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500'
@@ -56,21 +37,53 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
   const [contactChannel, setContactChannel] = useState<'email' | 'sms'>('email')
   const [contactValue, setContactValue] = useState('')
   const [hostHint, setHostHint] = useState('')
+  const [purpose, setPurpose] = useState<string>(PURPOSES[0])
+  const [groupType, setGroupType] = useState<GroupType>('individual')
+  const [groupSize, setGroupSize] = useState('')
+  const [identityChoice, setIdentityChoice] = useState<IdentityChoice>('send_to_host')
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false)
   const [turnstileToken, setTurnstileToken] = useState('')
+  // Client-side mirror of US-13a's DTO validator (group -> size required), so
+  // a group submission never round-trips to a guaranteed 422.
+  const [groupSizeError, setGroupSizeError] = useState(false)
+  const successRef = useRef<HTMLDivElement>(null)
 
   const mutation = useMutation({
     mutationFn: () =>
-      submitPortalRequest(tenantSlug, {
+      submitVisitRequest(tenantSlug, {
         visitor_full_name: visitorFullName,
         contact_channel: contactChannel,
         contact_value: contactValue,
-        host_hint: hostHint,
+        host_hint: hostHint || null,
+        purpose,
+        group_type: groupType,
+        expected_group_size: groupType === 'group' ? Number(groupSize) : null,
+        identity_verification_choice: identityChoice,
         privacy_notice_acknowledged: privacyAcknowledged,
         privacy_notice_version: PRIVACY_NOTICE_VERSION,
         turnstile_token: turnstileToken,
       }),
   })
+
+  // Move visible keyboard focus to the success message once it replaces the
+  // form (the submit button unmounts, so focus would otherwise revert to
+  // <body>) -- WCAG 2.4.3, the same fix CheckinPage carries (US-13b verify
+  // Should-fix; the DoD committed to matching CheckinPage's focus handling).
+  useEffect(() => {
+    if (mutation.isSuccess) successRef.current?.focus()
+  }, [mutation.isSuccess])
+
+  const handleSubmit = () => {
+    // Mirror US-13a's DTO validator: group requires a size >= 1 (an empty
+    // value OR a non-positive number both block, so the client fully matches
+    // the backend's `ge=1`, not just "non-empty" -- US-13b verify Note).
+    if (groupType === 'group' && Number(groupSize) < 1) {
+      setGroupSizeError(true)
+      return
+    }
+    setGroupSizeError(false)
+    mutation.mutate()
+  }
 
   return (
     <div className="bg-white border border-slate-200/70 shadow-sm rounded-xl p-5 h-full flex flex-col">
@@ -80,6 +93,9 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
 
       {mutation.isSuccess ? (
         <div
+          ref={successRef}
+          tabIndex={-1}
+          role="status"
           aria-label={t('portal.successLabel', 'Visit request submitted')}
           className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center my-auto"
         >
@@ -99,7 +115,7 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
           className="space-y-3 flex-1 flex flex-col"
           onSubmit={(event) => {
             event.preventDefault()
-            mutation.mutate()
+            handleSubmit()
           }}
         >
           <label htmlFor="visitor-full-name" className={labelClasses}>
@@ -166,6 +182,109 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
               className={inputClasses}
             />
           </label>
+
+          <label htmlFor="purpose" className={labelClasses}>
+            {t('portal.purpose', 'Purpose of visit')}
+            <span className="text-rose-500">*</span>
+            <select
+              id="purpose"
+              value={purpose}
+              onChange={(event) => setPurpose(event.target.value)}
+              className={inputClasses}
+            >
+              {PURPOSES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <fieldset>
+            <legend className={labelClasses}>
+              {t('portal.groupType', 'Are you visiting alone or as a group?')}
+              <span className="text-rose-500">*</span>
+            </legend>
+            <div className="flex gap-x-6 gap-y-2 mt-2">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="group-type"
+                  checked={groupType === 'individual'}
+                  onChange={() => {
+                    setGroupType('individual')
+                    setGroupSizeError(false)
+                  }}
+                  className="accent-blue-600 w-4 h-4"
+                />
+                {t('portal.individual', 'Individual')}
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="group-type"
+                  checked={groupType === 'group'}
+                  onChange={() => setGroupType('group')}
+                  className="accent-blue-600 w-4 h-4"
+                />
+                {t('portal.groupVisitors', 'Group visitors')}
+              </label>
+            </div>
+          </fieldset>
+
+          {groupType === 'group' && (
+            <label htmlFor="group-size" className={labelClasses}>
+              {t('portal.groupSize', 'Group size')}
+              <span className="text-rose-500">*</span>
+              <input
+                id="group-size"
+                type="number"
+                min={1}
+                value={groupSize}
+                onChange={(event) => {
+                  setGroupSize(event.target.value)
+                  if (event.target.value.trim()) setGroupSizeError(false)
+                }}
+                aria-invalid={groupSizeError}
+                aria-describedby={groupSizeError ? 'group-size-error' : undefined}
+                className={inputClasses}
+              />
+              {groupSizeError && (
+                <span id="group-size-error" role="alert" className="text-xs text-rose-600">
+                  {t('portal.groupSizeRequired', 'Please enter your group size.')}
+                </span>
+              )}
+            </label>
+          )}
+
+          <fieldset>
+            <legend className={labelClasses}>
+              {t('portal.identityChoice', 'Identity verification')}
+              <span className="text-rose-500">*</span>
+            </legend>
+            <div className="flex flex-col gap-2 mt-2">
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="identity-choice"
+                  checked={identityChoice === 'send_to_host'}
+                  onChange={() => setIdentityChoice('send_to_host')}
+                  className="accent-blue-600 w-4 h-4 mt-0.5"
+                />
+                {t('portal.sendToHost', "I'll send my ID to my host directly")}
+              </label>
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="identity-choice"
+                  checked={identityChoice === 'upload_now'}
+                  onChange={() => setIdentityChoice('upload_now')}
+                  className="accent-blue-600 w-4 h-4 mt-0.5"
+                />
+                {t('portal.uploadNow', 'I will upload my ID at the kiosk on arrival')}
+              </label>
+            </div>
+          </fieldset>
 
           <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
             <input

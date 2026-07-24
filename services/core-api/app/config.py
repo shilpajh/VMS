@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     # this header itself to spoof its source IP (US-11 plan, task 7).
     trust_forwarded_for: bool = False
 
+    # Browser-facing CORS allowlist -- explicit origins only, never "*"
+    # (credentials/Authorization headers are in play). Defaults to the local
+    # Vite dev server only; production origins come from real app
+    # configuration, never checked in as a default here. (Re-applied in
+    # US-13b -- the US-01 fix was orphaned before its PR.)
+    cors_allowed_origins: list[str] = ["http://localhost:5173"]
+
     # --- US-13a: portal OTP contact verification + tracking lookup ---
     # Key-Vault-managed HMAC secret for hashing the low-entropy OTP and the
     # verification token (app/crypto/hmac_hash.py, ADR-004). Placeholder for

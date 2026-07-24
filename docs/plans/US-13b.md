@@ -1,102 +1,130 @@
-# US-13b: Portal UI Redesign (card layout + OTP wizard + tracking lookup)
+# US-13b: Portal Redesign — fix the submission contract break + card layout + tracking lookup
 
-Status: Approved (Human Gate 1, 2026-07-24) — blocked on US-13a merging first
+Status: Approved (Human Gate 1, 2026-07-24 — refreshed against the merged US-13a backend; supersedes the pre-implementation draft. CORS fix + traceability kept in-scope per approval.)
 
-> Split from the original combined US-13 (see `docs/plans/US-13a.md` for the backend/security half and the split rationale). **US-13b is the frontend-only redesign and depends on US-13a being merged first** — it consumes the endpoints US-13a ships. Design reference: `visitor_management_prototype (1).jsx`'s `VisitorPortal` function and the live prototype screenshot.
+> Frontend redesign that consumes the US-13a backend (now merged to `main`). **Refreshed after US-13a shipped**, which changed two things the original draft couldn't know: (1) the current portal form is now *broken* against the backend, and (2) the OTP flow can't complete for real users yet. Two Gate-1 decisions were taken (below). Design reference: `visitor_management_prototype (1).jsx`'s `VisitorPortal` + the prototype screenshot.
+
+> **Gate-1 amendment — 2026-07-24 (during execution, human-directed): Decision 2 reversed to MATCH the prototype's look.** After seeing the plain-grid build, the human explicitly asked (mid-`/execute-story`, confirmed via a direct question) for the portal to look like the prototype — the two-panel illustrated layout (blue left panel with acme branding + reception SVG, cards on the right) that Decision 2 below originally rejected. This is a human Gate-1 amendment, not an agent working around the plan: the styling change (`PortalPage.tsx` two-panel layout + new decorative `PortalIllustration.tsx`) was built per that instruction. Scope of the amendment is **visual only** — the prototype's OTP flow (no relay worker) and its Feedback/manual cards (no PRD grounding) remain out of scope, re-confirmed with the human at the same time. The rejected-alternative note and Decision 2 text below are left as originally written to preserve the trail; this amendment supersedes them.
 
 ## Part A — Intent
 
 ### Problem
-US-11's portal is a single-page form (name/contact/host, one submit). The product design reference (prototype `VisitorPortal` + screenshot) is a multi-card landing page — **Request a visit** (a contact → OTP → details wizard), **Track a visit request** (status lookup by reference), and **Log in** (staff shell entry) — matching PRD 3.1's "look up live status on the same portal using [the tracking] reference, with no account needed." US-13a ships the backend for the OTP wizard and the tracking lookup; nothing yet renders them.
+US-13a (backend, merged) made `purpose`, `group_type`, and `identity_verification_choice` **required** on `POST /public/portal/{slug}/visit-requests`. The current `PortalRequestForm.tsx` (from US-11) does not send them, so **a real portal submission now returns 422** — the public portal is currently broken on `main`. Separately, PRD 3.1 wants a portal that also lets a visitor "look up live status … using [the tracking] reference, with no account needed"; US-13a shipped that lookup endpoint but nothing renders it. The product reference shows a multi-card landing page (Request a visit / Track a visit / Log in).
 
 ### Solution
-Redesign `apps/web/src/portal` to the reference's card layout: a Request-a-visit multi-step wizard (contact + privacy consent → OTP request/verify → visit details) driving US-13a's `otp/request`/`otp/verify`/`visit-requests` endpoints; a Track-a-visit card driving the lookup endpoint; and a Log-in card linking into the existing MSAL staff shell. Server decides everything; the UI only renders (`frontend-react.md`).
+- **Fix the break**: the Request-a-visit form sends the now-required `purpose`/`group_type`/`expected_group_size`/`identity_verification_choice` (plus the existing name/contact/host/consent/CAPTCHA fields), so real submissions succeed again (the `portal_otp_required` flag is off, so no verification token is needed — submission takes US-13a's US-11-compatible consent path).
+- **Redesign** `apps/web/src/portal` into the reference's card layout — Request a visit, Track a visit (drives US-13a's lookup endpoint), Log in (links to the existing MSAL staff shell) — as a plain responsive grid consistent with the app's current minimal style.
+- **Enabling fix**: re-apply the CORS middleware (orphaned from US-01) so the browser can actually reach the API — without it, every portal fetch is blocked and this UI can't be browser-tested.
+- **Housekeeping**: refresh `specs/traceability.md` (rolled into this branch per the US-13a close-out decision).
+
+### Gate-1 decisions taken (this story couldn't have known these pre-US-13a)
+1. **No OTP wizard in this story.** US-13a's OTP endpoints require CAPTCHA, and no SMS/email relay worker exists to deliver an OTP — a real visitor would hit a dead end at the OTP step. Since `portal_otp_required` defaults **off**, submission works *without* a verification token. So US-13b ships a direct Request-a-visit form (no contact→OTP→details wizard); the OTP wizard becomes its own story once the relay worker (ADR-004 O3) exists. This keeps the portal fully usable for real visitors now, consistent with US-13a's config-gate intent.
+2. **Plain responsive grid**, not a pixel-copy of the prototype's illustrated two-panel layout — faster, and it doesn't introduce bespoke styling the rest of the app doesn't use. Structure (three cards, the fields) matches; visual richness doesn't.
 
 ### Out of scope (explicit scope-creep fence)
-- **All backend/API/contract work** — US-13a. This story adds no endpoints and changes no server behavior.
-- **Feedback widget & downloadable user manual** (present in the prototype) — no PRD grounding, no backend; not built. The prototype's Feedback card would need its own collection/retention/consent story; the manual-download is cosmetic. Deliberately dropped.
-- **Real ID/selfie file upload** — the wizard renders the `identity_verification_choice` radio (upload-now vs send-to-host) as US-13a's inert intent enum only; no actual file picker that stores/transmits a file (US-03 territory). The prototype's file-drop UI is represented as the choice, not a working uploader.
-- **Group-member entry UI** — renders `group_type` + `expected_group_size` (a count) per US-13a; does not build a per-member repeater form.
-- **Consuming/displaying the check-in code in the tracking card** — US-13a's lookup never returns it; the card shows status + the visitor's own submitted details only, matching that contract (a deliberate divergence from the prototype, which shows the code).
+- **The OTP wizard** (contact→OTP→details) — deferred (decision 1). The `otp/request`/`otp/verify` endpoints exist and are tested (US-13a) but get no UI here.
+- **All backend/API/contract work except the CORS re-apply** — no new endpoints, no changed server behavior. The CORS middleware is a dev-infrastructure enabling fix (already reviewed in US-01, orphaned before that PR), not new product behavior.
+- **Feedback widget & manual-download** (in the prototype) — no PRD grounding, no backend; dropped.
+- **Real ID/selfie upload** — the form renders `identity_verification_choice` (upload-now vs send-to-host) as US-13a's inert intent enum only; no file picker that stores/transmits anything (US-03 territory).
+- **Group-member entry** — renders `group_type` + `expected_group_size` (a count); no per-member repeater.
+- **Showing the check-in code in the tracking card** — US-13a's lookup never returns it; the card shows status + the visitor's own submitted details only.
 
 ### Risks (non-obvious failure modes)
-- **The wizard's client-side step state is not a security control.** US-13a's server-side token validation is. The UI must not assume its own `step === "verified"` means anything to the backend — it always sends the token US-13a issued and lets the server decide (a modified client that skips steps just gets a 422).
-- **Demo vs. real OTP delivery.** With US-13a's `portal_otp_required` flag and no relay worker, a real deployment can't deliver the OTP yet. The wizard must degrade honestly: when the flag is off (backend doesn't require a token), the wizard should still function end-to-end; the "enter the code we sent you" copy must not imply a message was actually delivered in an environment where it wasn't. Coordinate the exact copy/flag-awareness with US-13a's config.
-- **Anti-enumeration is a backend property, but the UI must not re-leak it.** Every non-OK response (400/404/422/429/network) must render one identical generic message, exactly as US-11's form already does — the redesign must preserve that, not regress it by rendering distinguishable per-status errors.
-- **WCAG on a multi-step wizard** — focus management across steps (moving focus to the new step's first field/heading), labeled inputs, `role="alert"`/`role="status"` live regions, keyboard-only completion — the same standard US-01's `CheckinPage` had to meet, now across a 3-step flow.
-- **First substantial multi-column responsive layout** in this app — the card grid must not break the page's horizontal scroll on mobile (the prototype uses a phone-frame preview; the real app is just responsive).
+- **The form must send exactly what US-13a requires or stays 422.** `group_type: "group"` additionally requires `expected_group_size` (US-13a's DTO validator → 422 without it) — the form must enforce that client-side too, or a group submission fails server-side.
+- **Anti-enumeration is a backend property the UI must not re-leak.** Every non-OK response (400/404/422/429/network) renders one identical generic message — exactly as US-11's form already does. The tracking card must render only the three fields the server returns (`status`, `visitor_full_name`, `host_hint`) and never assume a resolved-employee-name or check-in-code field exists.
+- **CORS re-apply must match US-01's reviewed version** — explicit origin allowlist (never `*`, since staff routes carry `Authorization`), default scoped to the Vite dev origin; not a fresh, looser take.
+- **WCAG on the (now single-step) form + tracking card** — labelled inputs, `role="alert"`/`role="status"` live regions, keyboard-completable, focus to the result on submit — the standard US-01's `CheckinPage` met.
+- **First multi-column responsive layout** in this app — the card grid must not introduce horizontal-scroll on a narrow viewport.
 
 ## Part B — Contracts
-None. Frontend-only; consumes US-13a's already-approved OpenAPI contract. No state-machine, API, permission, or schema change originates here.
+No new contract. Consumes US-13a's already-merged OpenAPI (`submitPortalVisitRequest`, `trackPortalVisitRequest`). The CORS change is server config, not an API/contract change. No state-machine, permission, or schema change.
 
 ### Gherkin scenarios
 ```gherkin
-Feature: Portal UI redesign (US-13b)
+Feature: Portal redesign (US-13b)
 
-  Scenario: The wizard walks contact -> OTP -> details and shows the tracking reference
+  Scenario: A visit request submits with the now-required fields
     Given I am on the acme-corp portal landing page
-    When I acknowledge the privacy notice and enter my email and request an OTP
-    And I enter the OTP and verify it
-    And I fill in name, host, purpose, group type, identity-verification choice and submit
-    Then I see the tracking reference returned by the server
+    When I fill in name, contact, host, purpose, group type and identity-verification choice
+    And I acknowledge the privacy notice and complete the CAPTCHA and submit
+    Then I see the tracking reference the server returned
 
-  Scenario: Tracking card renders server status without leaking anything extra
-    Given I have a tracking reference for an approved request
+  Scenario: Choosing "group" requires a group size before submit
+    Given I am filling in the request form
+    When I select group type "group" and leave the group size empty
+    Then the form blocks submission and asks for the group size
+
+  Scenario: The tracking card renders server status without leaking anything extra
+    Given I have a tracking reference
     When I enter it in the Track-a-visit card and check status
-    Then I see the status the server returned and my own submitted details
+    Then I see the status and my own submitted details
     And I never see a resolved employee host name or a check-in code
 
   Scenario: Every failure renders one identical generic message (anti-enumeration preserved)
-    Given the server returns 400/404/422/429 or a network error at any step
-    Then the UI renders the same generic error each time, never a status-specific one
+    Given the server returns 400/404/422/429 or a network error
+    Then the UI renders the same generic error, never a status-specific one
 ```
 
 ## Part C — Plan
 
 ### Definition of done
-- All 3 Gherkin scenarios pass as Testing-Library tests.
-- The wizard (`contact+consent → OTP → details`) drives US-13a's three endpoints with the correct request shapes (asserted against the OpenAPI contract types, not hand-rolled).
-- Privacy-notice acknowledgment is required on the FIRST step (before OTP request), matching US-13a's consent ordering — a test asserts "Request OTP" is disabled/blocked until acknowledged.
-- Every non-OK response at every step renders one identical generic message — directly tested across 400/404/422/network.
-- The tracking card renders status + the visitor's own submitted details only, and a test asserts it never renders a field that would only exist if the server had returned a resolved employee name or a check-in code.
-- WCAG 2.1 AA: each step's inputs are labelled; focus moves to the new step on transition; success/error use `role="status"`/`role="alert"`; the whole flow is keyboard-completable — tested.
-- All user-facing strings via `t()` (i18next); no hardcoded copy.
+- All 4 Gherkin scenarios pass as Testing-Library tests.
+- The Request-a-visit form sends `visitor_full_name`, `contact_channel`, `contact_value`, `host_hint`, `purpose`, `group_type`, `expected_group_size` (when group), `identity_verification_choice`, `privacy_notice_acknowledged`, `privacy_notice_version`, `turnstile_token` — matching US-13a's DTO exactly; a real submission returns 202 (verified against the OpenAPI types, not hand-rolled).
+- `group_type = "group"` disables/blocks submit until `expected_group_size` is provided — tested.
+- Privacy-notice acknowledgment + a completed CAPTCHA are required before submit (unchanged US-11 behavior, preserved) — tested.
+- The Track-a-visit card renders `status` + `visitor_full_name` + `host_hint` only; a test asserts it never renders a field that would only exist if the server returned a resolved employee name or a check-in code; a 404/unknown renders the one generic message.
+- Every non-OK response across the form and the tracking card renders one identical generic message — tested across 400/404/422/network.
+- WCAG 2.1 AA: labelled inputs, `role="status"`/`role="alert"`, focus-to-result on submit, keyboard-completable — tested.
+- All user-facing strings via `t()`; no hardcoded copy.
 - The Log-in card links into the existing MSAL staff shell (no auth code change).
-- The OTP-delivery copy is honest under US-13a's `portal_otp_required` flag (no "we sent you a code" claim when nothing was delivered) — coordinated with the flag's state.
+- CORS middleware re-applied (matching US-01's reviewed version); `curl -H "Origin: http://localhost:5173" .../health` returns the `access-control-allow-origin` header; the backend suite stays green.
+- `specs/traceability.md` refreshed (Status column + rows for US-10/US-01/US-13a/US-13b).
 - `tsc -b` and `oxlint` clean; no `apps/web/src/portal` horizontal-scroll regression on a narrow viewport.
 
-### File map (frontend only — apps/web/src/portal)
-- `PortalPage.tsx` — amend: card-grid layout (Request a visit / Track a visit / Log in), replacing the single-form page.
-- `PortalRequestForm.tsx` — amend: multi-step wizard shell + the details step (adds purpose/group_type/expected_group_size/identity_verification_choice fields).
-- `ContactConsentStep.tsx` — new: step 1 (contact + privacy-notice acknowledgment + Request OTP).
-- `OtpStep.tsx` — new: step 2 (OTP request feedback + verify).
-- `TrackingLookup.tsx` — new: the Track-a-visit card.
-- Tests: `PortalRequestForm.test.tsx` (amend), `ContactConsentStep.test.tsx`, `OtpStep.test.tsx`, `TrackingLookup.test.tsx` (new).
-- Possibly a small shared `portalApi.ts` — typed fetch wrappers for the three endpoints (keeps request shapes in one place, matching the contract).
+### File map
+
+**Frontend (apps/web/src/portal)**
+- `PortalRequestForm.tsx` — amend: add the now-required fields (purpose input, group_type radio, conditional expected_group_size, identity_verification_choice radio); keep the existing Turnstile + privacy-ack.
+- `PortalPage.tsx` — amend: two-panel layout (left branding/illustration panel + Request a visit / Track a visit / Log in cards), replacing the single-form page. (Per the Gate-1 amendment above — originally a plain grid.)
+- `PortalIllustration.tsx` — new (Gate-1 amendment): the decorative reception-scene SVG for the left panel, `aria-hidden`.
+- `TrackingLookup.tsx` — new: the Track-a-visit card (drives `GET .../visit-requests/{ref}`).
+- `portalApi.ts` — new: typed fetch wrappers for submit + lookup (request shapes in one place, matching the contract).
+- Tests: `PortalRequestForm.test.tsx` (amend — new fields, group-size rule, generic error), `TrackingLookup.test.tsx` (new), `PortalPage.test.tsx` (new — three cards, login link).
+
+**Backend (enabling fix only — the orphaned US-01 CORS middleware)**
+- `services/core-api/app/main.py` — re-add `CORSMiddleware` (US-01's reviewed version).
+- `services/core-api/app/config.py` — re-add `cors_allowed_origins` (explicit allowlist, Vite dev default).
+
+**Docs**
+- `specs/traceability.md` — refresh (Status column + US-10/US-01/US-13a/US-13b rows).
 
 ### User journey (demo path)
-As US-13a's journey, but driven through the redesigned browser UI instead of curl: land on the card page → consent + request OTP (step 1) → verify OTP (step 2, code recovered from the outbox in demo) → fill details + submit (step 3) → see tracking reference → paste it into the Track card → see status.
+1. Anonymous visitor opens `/portal/acme-corp`, sees the three-card layout.
+2. In Request a visit: fills name/contact/host/purpose/group-type/identity-choice, ticks privacy, completes the (test-key) CAPTCHA, submits → 202 + tracking reference shown.
+3. Pastes the reference into Track a visit → sees status `Requested` + their own name + typed host string (no employee name, no code).
+4. A host approves via the existing API/flow → the tracking card, on re-check, shows `Registered`.
+5. Log in card → the existing staff MSAL shell (real Entra needed to actually sign in — unchanged).
 
 ### Numbered tasks
-1. **`portalApi.ts`** typed wrappers for `otp/request`/`otp/verify`/`visit-requests`/lookup. Test: correct URLs/bodies/headers.
-2. **`ContactConsentStep.tsx`** (step 1, consent-gated Request-OTP). Test: OTP request blocked until privacy-ack; generic error on failure.
-3. **`OtpStep.tsx`** (step 2). Test: verify success advances; every failure renders the one generic message.
-4. **`PortalRequestForm.tsx` wizard shell + details step** (new fields). Test: full walk to a rendered tracking reference; focus moves per step.
-5. **`TrackingLookup.tsx`** card. Test: renders server status + own details only; never a resolved employee name/code; generic 404 message.
-6. **`PortalPage.tsx` card-grid layout** + Log-in card link. Test: renders three cards; login links to the staff shell; no mobile horizontal-scroll regression.
+1. **Re-apply CORS** (`main.py` + `config.py`, US-01's reviewed version). Test: backend suite green; `Origin` header echoed on `/health`.
+2. **`portalApi.ts`** typed wrappers (submit + lookup). Test: correct URL/body/headers per the contract.
+3. **`PortalRequestForm.tsx`** new required fields + the group-size rule. Test: 202 body shape matches US-13a's DTO; group→size-required; consent+CAPTCHA gates preserved; generic error on failure.
+4. **`TrackingLookup.tsx`** card. Test: renders status + own details only, never a resolved employee name/code; generic 404 message.
+5. **`PortalPage.tsx`** card-grid + Log-in link. Test: three cards render; login links to the staff shell; no narrow-viewport horizontal scroll.
+6. **`specs/traceability.md`** refresh. (Docs; no test.)
 
 ---
 
 ## Three questions
 
 **1. What was the hardest decision in this plan?**
-Whether the wizard's "we sent a code to your phone/email" copy is honest given US-13a's `portal_otp_required` flag defaults off and no relay worker delivers anything yet. Rendering a confident "code sent" message in an environment where no message was sent is a small but real integrity issue (the OS's own communication-honesty guardrail applied to end users). Resolved by making the copy flag-aware / demo-honest rather than asserting delivery unconditionally — but it's the part most coupled to US-13a's runtime config.
+Whether to build the OTP wizard the prototype shows, or defer it. Building it would match the reference but ship a flow real visitors can't complete (no relay worker delivers the OTP), which contradicts US-13a's whole reason for making OTP config-gated — keep the portal working. Deferring the wizard and instead *fixing the now-broken direct-submit form* is the honest choice: it restores a working portal for real users today and leaves the OTP wizard for when delivery actually exists. The discovery that forced this was that US-13a's merge silently broke the existing form (new required fields) — so US-13b's first duty is a bug fix, not a redesign.
 
 **2. What alternatives were rejected, and why?**
-- **Building the Feedback and manual-download cards** to match the prototype pixel-for-pixel: rejected — no PRD requirement and (Feedback) no backend; a faithful build would need its own retention/consent design disproportionate to a decorative card.
-- **A working ID/selfie file uploader**: rejected — US-03 territory; storing/transmitting an identity document is a large privacy story, not a portal-redesign detail. Rendered as the inert choice US-13a models.
-- **Showing the check-in code in the tracking card (prototype behavior)**: rejected to match US-13a's contract, which deliberately never returns it.
-- **One monolithic `PortalRequestForm` holding all three steps inline**: rejected in favor of extracted `ContactConsentStep`/`OtpStep` components — each step is substantial (validation, error states, live regions) and easier to test in isolation, mirroring how US-01 extracted `getAccessToken`.
+- **Full OTP wizard now (demo-only)**: rejected — ships a dead-end flow for real visitors until the relay worker exists; inconsistent with US-13a's config-gate.
+- **Flag-aware wizard** (skip OTP when off): rejected for now — needs the frontend to learn the backend flag (a config endpoint or a build-time env var kept in sync), pushing beyond frontend-only scope for a step that still can't deliver anything.
+- **Pixel-matching the prototype** (SVG illustration, custom fonts): rejected — more work, introduces styling the app doesn't use elsewhere; a plain grid matches the structure that matters.
+- **Leaving CORS out** (frontend-only purity): rejected — without it the browser can't reach the API at all, so the UI is untestable in a real browser; re-applying an already-reviewed, orphaned fix is the pragmatic call, clearly fenced as an enabling change.
 
 **3. What's the least confident part of this plan?**
-Whether the card-grid layout should faithfully reproduce the prototype's exact two-panel (illustration + cards) composition or adopt a simpler responsive grid that fits the existing app's plainer visual language. The prototype is richly styled (SVG illustration, specific fonts); US-11's current portal is deliberately minimal. Matching the prototype exactly is more work and introduces styling the rest of the app doesn't use; a plainer grid is faster but visibly less polished than the reference the user pointed at. This is a fidelity-vs-effort call a human may want to weigh in on at Gate 1.
+Bundling the CORS backend fix and the traceability docs into a nominally frontend story. Both are justified (CORS is a prerequisite for browser-testing this UI; traceability was explicitly deferred to this branch), but they widen the story's surface beyond `apps/web`, and a reviewer may prefer the CORS fix as its own tiny Quick-Flow change (it qualifies: ≤3 files, no state-machine/tenancy/consent impact) rather than riding in here. Flagged so the human can split it out at Gate 1 if they'd rather.
