@@ -81,6 +81,7 @@ export function PortalRequestForm({ tenantSlug }: PortalRequestFormProps) {
 
       {mutation.isSuccess ? (
         <div
+          role="status"
           aria-label={t('portal.successLabel', 'Visit request submitted')}
           className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center my-auto"
         >
