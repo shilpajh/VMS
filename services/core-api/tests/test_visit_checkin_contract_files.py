@@ -75,3 +75,16 @@ def test_visit_lifecycle_checkin_verified_has_credential_grant_side_effect() -> 
 
 def test_adr_003_exists() -> None:
     assert ADR_003_FILE.exists()
+
+
+def test_arrival_notify_contract_documents_its_retention_purge_gate() -> None:
+    """Task 10 (US-01): visit.arrival.notify is a NEW PII-bearing message
+    type, even though it reuses the existing outbox_messages table. This
+    doesn't add a new purge job (US-07 owns building that) -- it confirms,
+    in the contract file itself, that this message type falls under the
+    same standing PII-retention/purge GA gate docs/reviews/US-11-review.md
+    already tracks for visit.checkin_code.dispatch, so a future /verify-story
+    or /release-readiness pass finds the linkage without re-deriving it."""
+    contract_text = ARRIVAL_NOTIFY_FILE.read_text()
+    assert "GA gate" in contract_text
+    assert "visit.checkin_code.dispatch" in contract_text
