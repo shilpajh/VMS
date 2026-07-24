@@ -1,11 +1,12 @@
-"""Visit lifecycle state machine (US-11, task 3).
+"""Visit lifecycle state machine (US-11 task 3; US-01 task 4).
 
 A frozen `(from_status, trigger) -> to_status` map, sourced from
-`packages/contracts/statemachine/visit-lifecycle.yaml` -- this story only
-wires the two portal/host transitions it implements
+`packages/contracts/statemachine/visit-lifecycle.yaml` -- wiring only the
+transitions each story implements: US-11's two portal/host transitions
 (`Requested -> Registered` via `host_approval`, `Requested -> Denied` via
-`host_denial`). Every other (status, trigger) pair -- including any attempt
-to jump directly to a later lifecycle status -- is rejected.
+`host_denial`) and US-01's QR check-in path (`Registered -> CheckedIn` via
+`checkin_verified`). Every other (status, trigger) pair -- including any
+attempt to jump directly to a later lifecycle status -- is rejected.
 
 Enforced in the domain layer (this module) AND in a DB transaction (the
 guarded conditional UPDATE in app/domain/visits/service.py, `WHERE
@@ -22,14 +23,16 @@ class InvalidTransitionError(Exception):
     contract; US-11 review Should-fix #6 concrete mapping)."""
 
 
-# Only the transitions this story implements. Every other lifecycle edge in
-# visit-lifecycle.yaml (e.g. Registered -> CheckedIn via checkin_verified,
-# Held -> CheckedIn via security_release) is later stories' work -- adding a
-# row here is the only way to "reach" a new transition; there is no generic
-# "apply any trigger" code path anywhere in this story's API surface.
+# Only the transitions wired so far. Every other lifecycle edge in
+# visit-lifecycle.yaml (e.g. Held -> CheckedIn via security_release,
+# AwaitingApproval -> CheckedIn via approver_confirm) is later stories'
+# work -- adding a row here is the only way to "reach" a new transition;
+# there is no generic "apply any trigger" code path anywhere in this
+# story's API surface.
 _TRANSITIONS: dict[tuple[str, str], str] = {
     ("Requested", "host_approval"): "Registered",
     ("Requested", "host_denial"): "Denied",
+    ("Registered", "checkin_verified"): "CheckedIn",
 }
 
 
