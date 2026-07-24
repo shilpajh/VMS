@@ -56,7 +56,7 @@ A loop stops and escalates when it hits an unclear requirement, exceeds bounded 
 
 ## Git operations policy
 - **Read operations** (`fetch`, `pull`, `checkout`, `status`, `log`, `diff`) are always allowed — an agent should never work from a stale or unverified tree.
-- **Commits during `/execute-story`** happen only on the story's own feature branch, scoped to the files in that story's plan file map. No agent commits directly to `main` or a release branch.
+- **Commits during `/execute-story`** happen only on the story's own feature branch, scoped to the files in that story's plan file map. No agent commits directly to `main` or a release branch. Stage those files explicitly (`git add <path>…`); do NOT use `git add -A`/`git add .` in the build loop — a blanket add sweeps unrelated untracked files (design docs, `.docx`, editor/OS cruft like `*:Zone.Identifier`) into the story's commits, which is out-of-scope and, for binaries, unreviewable. This bit US-13a (four stray files reached the branch, caught only at `/verify-story`). Keep `.gitignore` current for known local-only artifacts as a backstop, but explicit staging is the primary control.
 - **Push** is restricted by destination, not by role:
   - Feature/story branches and PR branches → any implementing agent may push its own commits, to open or update a PR.
   - `main` / release branches → **no agent ever pushes here directly.** Merges happen through a reviewed PR with the standard merge gates (Section: Delivery workflow, step 6), never an agent-initiated push.
