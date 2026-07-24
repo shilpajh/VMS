@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useMsal } from '@azure/msal-react'
@@ -40,6 +40,7 @@ export function CheckinPage() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
   const [checkinCode, setCheckinCode] = useState('')
+  const successRef = useRef<HTMLDivElement>(null)
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -51,6 +52,20 @@ export function CheckinPage() {
     },
   })
 
+  // Moves visible keyboard focus to the success message once it replaces
+  // the form (the form's own submit button unmounts, so focus would
+  // otherwise silently revert to <body>) -- a live region's announcement
+  // alone satisfies 4.1.3 Status Messages for screen readers, but not
+  // WCAG 2.4.3 Focus Order for sighted keyboard users (US-01 verify-story,
+  // accessibility Should-fix #1).
+  useEffect(() => {
+    if (mutation.isSuccess) {
+      successRef.current?.focus()
+    }
+  }, [mutation.isSuccess])
+
+  const errorId = 'checkin-code-error'
+
   return (
     // A <section>, not <main> -- this page is rendered nested inside App's
     // own <main> shell (App.tsx's AuthenticatedCheckinGate), and a page
@@ -60,6 +75,8 @@ export function CheckinPage() {
 
       {mutation.isSuccess ? (
         <div
+          ref={successRef}
+          tabIndex={-1}
           aria-label={t('checkin.successLabel', 'Visitor checked in')}
           role="status"
         >
@@ -84,6 +101,8 @@ export function CheckinPage() {
               required
               value={checkinCode}
               onChange={(event) => setCheckinCode(event.target.value)}
+              aria-invalid={mutation.isError}
+              aria-describedby={mutation.isError ? errorId : undefined}
             />
           </label>
           <button type="submit" disabled={mutation.isPending}>
@@ -93,7 +112,7 @@ export function CheckinPage() {
       )}
 
       {mutation.isError && (
-        <p role="alert">
+        <p id={errorId} role="alert">
           {t('checkin.error', 'Invalid or expired check-in code.')}
         </p>
       )}

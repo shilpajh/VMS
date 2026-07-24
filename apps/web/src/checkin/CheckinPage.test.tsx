@@ -86,4 +86,60 @@ describe('CheckinPage', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
   })
+
+  it('moves focus to the success message once the form unmounts (WCAG 2.4.3)', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 'CheckedIn',
+          visitor_full_name: 'Jane Visitor',
+          tracking_reference: 'REQ-123456789012',
+        }),
+        { status: 200 },
+      ),
+    )
+
+    renderPage()
+
+    await user.type(screen.getByLabelText(/check-in code/i), 'a-valid-code')
+    await user.click(screen.getByRole('button', { name: /check in/i }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveFocus())
+  })
+
+  it('marks the code input invalid and describes it by the error message on failure', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }))
+
+    renderPage()
+
+    const input = screen.getByLabelText(/check-in code/i)
+    await user.type(input, 'unknown-code')
+    await user.click(screen.getByRole('button', { name: /check in/i }))
+
+    const alert = await screen.findByRole('alert')
+    await waitFor(() => expect(input).toHaveAttribute('aria-invalid', 'true'))
+    expect(input.getAttribute('aria-describedby')).toBe(alert.id)
+  })
+
+  it('submits via keyboard alone (Enter in the code field), with no mouse interaction', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 'CheckedIn',
+          visitor_full_name: 'Jane Visitor',
+          tracking_reference: 'REQ-123456789012',
+        }),
+        { status: 200 },
+      ),
+    )
+
+    renderPage()
+
+    await user.type(screen.getByLabelText(/check-in code/i), 'a-valid-code{Enter}')
+
+    await waitFor(() => expect(screen.getByText(/Jane Visitor/)).toBeInTheDocument())
+  })
 })
