@@ -8,6 +8,7 @@ paths:
 
 # Security and privacy rules
 - Never log PII, credentials, raw identity documents, biometric captures, or templates.
+- An ops-script/CLI's stdout is a log surface too: never echo raw PII (contact value, email, identity doc, subject id) to console output — mask it or print a keyed/HMAC reference. Ops stdout gets captured to runbook/CI logs, so the keyed-HMAC discipline protecting the audit row applies there equally (US-07: `erase_subject` echoed the raw `--value`).
 - Any biometric/watchlist uncertainty transitions to Held and needs authorized human review — no automated denial anywhere.
 - Consent is explicit, versioned, purpose-limited, and linked before biometric capture. A recorded consent references the exact document version it was given against — when a site's NDA/privacy notice/safety-briefing version bumps, a visitor's prior consent does NOT carry forward automatically; they must re-consent to the new version before their next visit proceeds. Never grandfather old consent silently.
 - Raw biometric captures deleted at earliest permitted point; protected templates encrypted, segregated from PII.
