@@ -8,6 +8,7 @@ needs the full schema (e.g. `Base.metadata.create_all`).
 from app.models.audit import AuditEvent
 from app.models.base import Base
 from app.models.outbox import OutboxMessage
+from app.models.portal_contact_verification import PortalContactVerification
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.tenant import PLATFORM_TENANT_ENTRA_TENANT_ID, PLATFORM_TENANT_ID, Tenant
 from app.models.user import User
@@ -26,4 +27,5 @@ __all__ = [
     "AuditEvent",
     "Visit",
     "OutboxMessage",
+    "PortalContactVerification",
 ]
