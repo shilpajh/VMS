@@ -35,7 +35,10 @@ class PortalVisitRequestAccepted(BaseModel):
 
 
 class VisitOut(BaseModel):
-    """Authenticated host/reception view of a visit (task 11)."""
+    """Authenticated host/reception view of a visit (task 11; US-01 task 6
+    adds `checked_in_at`). Deliberately never includes `checkin_code_hash`
+    or any plaintext code -- the check-in credential never round-trips
+    through this response."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -52,8 +55,17 @@ class VisitOut(BaseModel):
     correlation_id: uuid.UUID
     decided_by_user_id: uuid.UUID | None
     decided_at: datetime | None
+    checked_in_at: datetime | None = None
     created_at: datetime
 
 
 class VisitDenyRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class VisitCheckinRequest(BaseModel):
+    """US-01, task 6. `checkin_code` is the plaintext QR-decoded bearer
+    credential -- accepted only in the POST body, never a query/path
+    param (never wants to land in server access logs or browser history)."""
+
+    checkin_code: str = Field(min_length=1)

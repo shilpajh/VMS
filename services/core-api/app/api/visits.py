@@ -22,17 +22,28 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dtos.visits import VisitDenyRequest, VisitOut
+from app.api.dtos.visits import VisitCheckinRequest, VisitDenyRequest, VisitOut
 from app.auth.dependencies import Principal, get_current_principal
 from app.crypto.envelope import EnvelopeKeyProvider, get_envelope_key_provider
 from app.db.session import get_session
 from app.domain.rbac import has_permission
-from app.domain.visits.service import EmptyDenialReasonError, InvalidTransitionError, approve_visit, deny_visit
+from app.domain.visits.service import (
+    EmptyDenialReasonError,
+    InvalidCheckinCodeError,
+    InvalidTransitionError,
+    approve_visit,
+    checkin_visit,
+    deny_visit,
+)
 from app.models import Visit
 
 router = APIRouter()
 
 _FORBIDDEN_DETAIL = "forbidden"
+# One uniform detail string across every check-in rejection cause (unknown
+# hash, wrong tenant, expired, already consumed) -- never distinguishable,
+# per the US-01 plan's anti-enumeration reasoning.
+_INVALID_CHECKIN_CODE_DETAIL = "invalid or expired check-in code"
 
 
 async def _require_permission(session: AsyncSession, principal: Principal, permission_code: str) -> None:
@@ -124,6 +135,36 @@ async def list_visits(
         )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+@router.post("/visits/checkin", response_model=VisitOut)
+async def checkin_visit_route(
+    body: VisitCheckinRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+    key_provider: EnvelopeKeyProvider = Depends(get_envelope_key_provider),
+) -> Visit:
+    """QR check-in (US-01). Registered here BEFORE `GET /visits/{visit_id}`
+    even though the two never collide on method -- `/visits/checkin` has
+    the same segment count as `/visits/{visit_id}`, and this ordering makes
+    the exact-string route win deterministically rather than relying on
+    Starlette's path-vs-param precedence. Gated on `checkin_confirm`
+    (tenant-scoped only, no host-ownership check -- this is a
+    reception/security action, not a host decision, unlike approve/deny)."""
+    await _require_permission(session, principal, "checkin_confirm")
+
+    try:
+        return await checkin_visit(
+            session,
+            tenant_id=principal.tenant_id,
+            checkin_code=body.checkin_code,
+            actor_user_id=principal.user_id,
+            key_provider=key_provider,
+        )
+    except InvalidCheckinCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_INVALID_CHECKIN_CODE_DETAIL
+        ) from None
 
 
 @router.get("/visits/{visit_id}", response_model=VisitOut)
