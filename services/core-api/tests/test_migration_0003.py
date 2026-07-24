@@ -71,8 +71,12 @@ def test_upgrade_head_adds_the_three_new_visits_columns(scratch_database: str) -
 
 
 def test_downgrade_one_step_removes_only_0003_columns(scratch_database: str) -> None:
+    """Upgrades to 0003 specifically (not "head", which now includes
+    0004_portal_contact_verification on top per US-13a) so a relative "-1"
+    exercises 0003's OWN downgrade(), not whatever migration currently sits
+    at head -- same pinning fix applied to test_migration_0002."""
     cfg = alembic_config(_migrator_dsn(scratch_database))
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0003_visit_checkin")
 
     command.downgrade(cfg, "-1")
     columns = _visits_columns(scratch_database)
