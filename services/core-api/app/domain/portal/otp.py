@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.crypto.hmac_hash import HmacKeyProvider, hmac_hash, verify_hmac
+from app.domain.audit import write_audit_event
 from app.models import PortalContactVerification
 
 __all__ = [
@@ -35,6 +36,14 @@ __all__ = [
     "verify_otp_and_issue_token",
     "consume_verification_token",
 ]
+
+_PORTAL_ACTOR = "portal"
+# PII-free coded audit reasons -- contact_value / OTP NEVER enter audit_events
+# (same discipline US-11 applied to denial_reason). The target is the
+# verification row's own id (a UUID, not PII), so abuse (bombing,
+# brute-force exhaustion) is forensically visible without leaking the contact.
+_OTP_VERIFIED_REASON = "portal_otp_verified"
+_OTP_EXHAUSTED_REASON = "portal_otp_attempts_exhausted"
 
 # A fixed non-matching HMAC digest used to keep the verify path constant-work
 # when no pending OTP row exists (US-13 review Should-fix #4): we still run an
@@ -161,12 +170,37 @@ async def verify_otp_and_issue_token(
             .where(PortalContactVerification.id == target_id)
             .values(otp_attempts=PortalContactVerification.otp_attempts + 1)
         )
+        # If this wrong guess just exhausted a real OTP's attempts, record a
+        # PII-free abuse-detection audit (the row id anchors it, never the
+        # contact). Only fires on the exact exhaustion transition, so it
+        # leaks nothing an attacker who already made 5 attempts didn't know.
+        if row is not None and usable and (row.otp_attempts + 1) >= settings.otp_max_attempts:
+            await write_audit_event(
+                session,
+                tenant_id=tenant_id,
+                event_type="portal.otp.attempts_exhausted",
+                actor=_PORTAL_ACTOR,
+                target_type="portal_contact_verification",
+                target_id=row.id,
+                reason=_OTP_EXHAUSTED_REASON,
+                correlation_id=row.id,
+            )
         raise InvalidOtpError("invalid or expired code")
 
     token = _generate_verification_token()
     row.verification_token_hash = hmac_hash(token, hmac_provider)
     row.verification_token_expires_at = now + timedelta(
         seconds=settings.verification_token_ttl_seconds
+    )
+    await write_audit_event(
+        session,
+        tenant_id=tenant_id,
+        event_type="portal.otp.verified",
+        actor=_PORTAL_ACTOR,
+        target_type="portal_contact_verification",
+        target_id=row.id,
+        reason=_OTP_VERIFIED_REASON,
+        correlation_id=row.id,
     )
     await session.flush()
     return token

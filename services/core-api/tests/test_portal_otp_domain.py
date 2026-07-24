@@ -236,6 +236,32 @@ async def test_token_is_single_use_and_contact_scoped(app_session, hmac_provider
         )
 
 
+async def test_verify_writes_pii_free_audit_event(app_session, hmac_provider) -> None:
+    from app.models import AuditEvent
+
+    tenant_id = await _mk_tenant(app_session)
+    row, code = await issue_otp(
+        app_session, tenant_id=tenant_id, contact_channel=CHANNEL,
+        contact_value="jane@example.com", privacy_notice_version="v1", hmac_provider=hmac_provider,
+    )
+    await verify_otp_and_issue_token(
+        app_session, tenant_id=tenant_id, contact_channel=CHANNEL,
+        contact_value="jane@example.com", otp_code=code, hmac_provider=hmac_provider,
+    )
+    audit = (
+        await app_session.execute(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == tenant_id, AuditEvent.event_type == "portal.otp.verified"
+            )
+        )
+    ).scalar_one()
+    assert audit.target_id == row.id  # anchored on the row (a UUID), not the contact
+    # No PII anywhere in the audit row.
+    for field in (audit.actor, audit.reason, str(audit.target_id), audit.target_type):
+        assert "jane@example.com" not in field
+        assert code not in field
+
+
 async def test_concurrent_token_consume_only_one_succeeds() -> None:
     """Race-safety: two concurrent consumes of the same token -> exactly one
     succeeds. Independent sessions/connections for real DB-level concurrency."""

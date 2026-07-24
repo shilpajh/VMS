@@ -125,6 +125,65 @@ def get_per_tenant_rate_limiter(
     )
 
 
+# --- US-13a: dedicated buckets, each on its OWN Redis key namespace so a
+# flood on one surface can never drain another's budget (US-13 review
+# Should-fix #5). OTP endpoints are stricter than submission; tracking
+# lookup is a read and is more generous, but still separate.
+def get_otp_request_ip_limiter(
+    redis_client: redis_async.Redis = Depends(get_redis_client),
+) -> TokenBucketRateLimiter:
+    return TokenBucketRateLimiter(
+        redis_client,
+        capacity=settings.otp_request_per_ip_capacity,
+        refill_per_minute=settings.otp_request_per_ip_refill_per_minute,
+        key_prefix="ratelimit:portal:otp_request:ip",
+    )
+
+
+def get_otp_request_contact_limiter(
+    redis_client: redis_async.Redis = Depends(get_redis_client),
+) -> TokenBucketRateLimiter:
+    return TokenBucketRateLimiter(
+        redis_client,
+        capacity=settings.otp_request_per_contact_capacity,
+        refill_per_minute=settings.otp_request_per_contact_refill_per_minute,
+        key_prefix="ratelimit:portal:otp_request:contact",
+    )
+
+
+def get_otp_verify_ip_limiter(
+    redis_client: redis_async.Redis = Depends(get_redis_client),
+) -> TokenBucketRateLimiter:
+    return TokenBucketRateLimiter(
+        redis_client,
+        capacity=settings.otp_verify_per_ip_capacity,
+        refill_per_minute=settings.otp_verify_per_ip_refill_per_minute,
+        key_prefix="ratelimit:portal:otp_verify:ip",
+    )
+
+
+def get_tracking_lookup_ip_limiter(
+    redis_client: redis_async.Redis = Depends(get_redis_client),
+) -> TokenBucketRateLimiter:
+    return TokenBucketRateLimiter(
+        redis_client,
+        capacity=settings.tracking_lookup_per_ip_capacity,
+        refill_per_minute=settings.tracking_lookup_per_ip_refill_per_minute,
+        key_prefix="ratelimit:portal:lookup:ip",
+    )
+
+
+def get_tracking_lookup_tenant_limiter(
+    redis_client: redis_async.Redis = Depends(get_redis_client),
+) -> TokenBucketRateLimiter:
+    return TokenBucketRateLimiter(
+        redis_client,
+        capacity=settings.tracking_lookup_per_tenant_capacity,
+        refill_per_minute=settings.tracking_lookup_per_tenant_refill_per_minute,
+        key_prefix="ratelimit:portal:lookup:tenant",
+    )
+
+
 async def enforce_public_rate_limits(
     request: Request,
     tenant_slug: str,

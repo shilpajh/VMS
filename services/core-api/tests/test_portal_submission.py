@@ -92,6 +92,9 @@ def _valid_submission_body(**overrides) -> dict:
         "host_hint": None,
         "privacy_notice_acknowledged": True,
         "privacy_notice_version": "v1",
+        "purpose": "Business meeting",
+        "group_type": "individual",
+        "identity_verification_choice": "send_to_host",
         "turnstile_token": VALID_CAPTCHA_TOKEN,
     }
     body.update(overrides)
