@@ -12,6 +12,7 @@ no code path here that could create one.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -159,6 +160,13 @@ async def update_tenant_user(
 
     previous_status = user.status
     user.status = body.status
+    # Maintain the retention reference (US-07/ADR-005, DA-B1): stamp
+    # disabled_at when disabling, clear it on re-enable so a re-enabled user
+    # is never purged on a stale clock.
+    if body.status == "disabled" and previous_status != "disabled":
+        user.disabled_at = datetime.now(timezone.utc)
+    elif body.status == "active":
+        user.disabled_at = None
     await session.flush()
 
     if previous_status != body.status:

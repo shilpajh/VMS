@@ -37,7 +37,11 @@ async def write_audit_event(
     reason: str,
     correlation_id: uuid.UUID,
     policy_version: str | None = None,
+    details: dict | None = None,
 ) -> AuditEvent:
+    # `details` (US-07/ADR-005): optional structured metadata (purge counts,
+    # erasure keyed-HMAC subject ref). NEVER PII -- this table is append-only
+    # and purge-exempt, so anything here is permanently un-erasable.
     event = AuditEvent(
         tenant_id=tenant_id,
         event_type=event_type,
@@ -47,6 +51,7 @@ async def write_audit_event(
         reason=reason,
         correlation_id=correlation_id,
         policy_version=policy_version,
+        details=details,
     )
     session.add(event)
     await session.flush()

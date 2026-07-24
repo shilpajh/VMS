@@ -121,6 +121,10 @@ class Visit(Base):
     )
     checked_in_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     checked_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Scrub idempotency marker (US-07/ADR-005, DA-S1): a scrubbed visit still
+    # matches the "terminal/abandoned + expired" predicate, so the scrub
+    # carries `purged_at IS NULL` to skip already-processed rows.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- Denial ---
     denial_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

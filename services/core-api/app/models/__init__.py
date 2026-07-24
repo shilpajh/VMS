@@ -10,6 +10,7 @@ from app.models.base import Base
 from app.models.outbox import OutboxMessage
 from app.models.portal_contact_verification import PortalContactVerification
 from app.models.rbac import Permission, Role, RolePermission, UserRole
+from app.models.retention_policy import RetentionPolicy
 from app.models.tenant import PLATFORM_TENANT_ENTRA_TENANT_ID, PLATFORM_TENANT_ID, Tenant
 from app.models.user import User
 from app.models.visit import Visit
@@ -28,4 +29,5 @@ __all__ = [
     "Visit",
     "OutboxMessage",
     "PortalContactVerification",
+    "RetentionPolicy",
 ]

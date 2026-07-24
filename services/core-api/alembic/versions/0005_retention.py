@@ -77,6 +77,10 @@ def upgrade() -> None:
 
     # --- vms_purge grants: narrow, scrub=UPDATE (never DELETE on referenced
     # tables), delete on transient, read what it needs, INSERT audit only ---
+    # retention_policies is a tenant-scoped config table a future compliance
+    # API manages on the request path -> vms_app gets the same CRUD grants as
+    # every other tenant table (RLS scopes it). The purge only reads it.
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON retention_policies TO vms_app")
     op.execute("GRANT SELECT ON tenants TO vms_purge")
     op.execute("GRANT SELECT ON retention_policies TO vms_purge")
     op.execute("GRANT SELECT, UPDATE ON users TO vms_purge")
@@ -94,6 +98,7 @@ def downgrade() -> None:
     op.execute("REVOKE ALL ON users FROM vms_purge")
     op.execute("REVOKE ALL ON retention_policies FROM vms_purge")
     op.execute("REVOKE ALL ON tenants FROM vms_purge")
+    op.execute("REVOKE ALL ON retention_policies FROM vms_app")
 
     op.drop_column("visits", "purged_at")
     op.drop_column("users", "purged_at")

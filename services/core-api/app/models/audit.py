@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -38,6 +38,12 @@ class AuditEvent(Base):
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     # Only populated for role-change events; NULL otherwise (ADR-001 §3/§9).
     policy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Structured metadata for events that need more than the coded `reason`
+    # (US-07/ADR-005: purge counts/policy/cutoff, erasure keyed-HMAC subject
+    # ref + counts). CONTRACT: no PII, ever -- this table is append-only and
+    # purge-exempt, so anything written here is permanently un-erasable
+    # (ADR-005, DA-S3).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

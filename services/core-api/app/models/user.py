@@ -44,6 +44,12 @@ class User(Base):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="active", server_default="active"
     )
+    # Retention reference for staff PII (US-07/ADR-005, DA-B1): set when the
+    # user is disabled, cleared on re-enable. The purge scrubs a user whose
+    # disabled_at is older than the staff_users window. `purged_at` marks an
+    # already-scrubbed row so a re-run is idempotent (DA-S1).
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
