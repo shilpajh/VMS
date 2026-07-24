@@ -8,6 +8,133 @@ info:
     tenancy/RLS pattern; the 403 (tenant scope) and 409 (invalid transition)
     response declarations below are mandatory per .claude/rules/contracts.md.
 paths:
+  /public/portal/{tenant_slug}/otp/request:
+    post:
+      summary: Request an OTP for a contact channel (public, unauthenticated; US-13a)
+      operationId: requestPortalOtp
+      description: >
+        Order: CAPTCHA -> dedicated rate limits (per-IP + per-contact_value,
+        stricter than submission) -> tenant-resolve -> privacy-notice-ack
+        gate (consent captured HERE, before PII is stored/dispatched) ->
+        supersede prior OTP + issue a fresh one + encrypted portal.otp.dispatch
+        outbox row. Always a generic 202 -- never reveals whether the contact
+        is known or had a prior OTP (anti-enumeration).
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalOtpRequestCreate" }
+      responses:
+        "202":
+          description: Generic accepted response (never contact-existence data).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalOtpRequestAccepted" }
+        "400":
+          description: CAPTCHA verification failed. No DB write.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Unknown or suspended tenant_slug (uniform, anti-enumeration).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: privacy_notice_acknowledged missing or false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Per-IP or per-contact_value rate limit exceeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /public/portal/{tenant_slug}/otp/verify:
+    post:
+      summary: Verify an OTP and receive a single-use verification token (US-13a)
+      operationId: verifyPortalOtp
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortalOtpVerifyRequest" }
+      responses:
+        "200":
+          description: >
+            Verified. Returns a transient single-use verification token,
+            scoped to this contact_channel/contact_value.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalOtpVerifyAccepted" }
+        "400":
+          description: >
+            Uniform failure -- no pending OTP / wrong code / expired /
+            attempts exhausted / CAPTCHA failure -- never distinguishable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Unknown or suspended tenant_slug (uniform).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Per-IP rate limit exceeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /public/portal/{tenant_slug}/visit-requests/{tracking_reference}:
+    get:
+      summary: Look up a visit request's status by tracking reference (US-13a)
+      operationId: trackPortalVisitRequest
+      description: >
+        No-account status lookup. Returns status + the visitor's OWN
+        submitted details only: host_hint is the string the visitor typed,
+        NEVER the resolved employee's display_name, and NEVER a check-in
+        code (decision 2 / US-13 review B2). Dedicated rate buckets
+        (separate from submission). Uniform 404 across unknown reference /
+        wrong tenant / malformed input.
+      parameters:
+        - name: tenant_slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: tracking_reference
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Status + the visitor's own submitted details only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PortalTrackingStatus" }
+        "404":
+          description: >
+            Uniform -- unknown reference, wrong tenant, or malformed input,
+            all byte-identical (anti-enumeration).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Per-IP or per-tenant rate limit exceeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /public/portal/{tenant_slug}/visit-requests:
     post:
       summary: Submit a visitor pre-registration (public, unauthenticated)
@@ -219,12 +346,63 @@ paths:
 
 components:
   schemas:
+    PortalOtpRequestCreate:
+      type: object
+      required: [contact_channel, contact_value, privacy_notice_acknowledged, privacy_notice_version, turnstile_token]
+      properties:
+        contact_channel: { type: string, enum: [email, sms] }
+        contact_value: { type: string }
+        privacy_notice_acknowledged: { type: boolean }
+        privacy_notice_version: { type: string }
+        turnstile_token: { type: string }
+
+    PortalOtpRequestAccepted:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+
+    PortalOtpVerifyRequest:
+      type: object
+      required: [contact_channel, contact_value, otp_code, turnstile_token]
+      properties:
+        contact_channel: { type: string, enum: [email, sms] }
+        contact_value: { type: string }
+        otp_code: { type: string }
+        turnstile_token: { type: string }
+
+    PortalOtpVerifyAccepted:
+      type: object
+      required: [verification_token]
+      properties:
+        verification_token:
+          type: string
+          description: Transient, single-use, scoped to the verified contact.
+
+    PortalTrackingStatus:
+      type: object
+      required: [status, visitor_full_name]
+      properties:
+        status:
+          type: string
+          enum: [Requested, Registered, AwaitingApproval, AwaitingDualSignoff, Held, CheckedIn, CheckedOut, Denied, Safe]
+        visitor_full_name: { type: string }
+        host_hint:
+          type: string
+          nullable: true
+          description: >
+            The string the visitor TYPED -- never the resolved employee's
+            display_name, never a check-in code (US-13 review B2).
+
     PortalVisitRequestCreate:
       type: object
       required:
         - visitor_full_name
         - contact_channel
         - contact_value
+        - purpose
+        - group_type
+        - identity_verification_choice
         - privacy_notice_acknowledged
         - privacy_notice_version
         - turnstile_token
@@ -233,6 +411,20 @@ components:
         contact_channel: { type: string, enum: [email, sms] }
         contact_value: { type: string }
         host_hint: { type: string, nullable: true }
+        purpose: { type: string }
+        group_type: { type: string, enum: [individual, group] }
+        expected_group_size:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Required when group_type is 'group'.
+        identity_verification_choice: { type: string, enum: [upload_now, send_to_host] }
+        verification_token:
+          type: string
+          nullable: true
+          description: >
+            Required only when portal_otp_required is on (server-enforced);
+            the single-use output of POST .../otp/verify.
         privacy_notice_acknowledged: { type: boolean }
         privacy_notice_version: { type: string }
         turnstile_token: { type: string }
