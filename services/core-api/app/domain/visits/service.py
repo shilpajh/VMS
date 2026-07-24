@@ -259,6 +259,15 @@ async def checkin_visit(
     (not inlined) so each guard has exactly one call site a later story
     replaces -- watchlist_clear is a deliberate always-True stub (see
     app.domain.visits.guards)."""
+    # Return values intentionally unchecked -- both always return True today
+    # (US-01 review, Should-fix: guard results are discarded). This is safe
+    # ONLY because there is no real watchlist yet. A future watchlist story
+    # must NOT simply flip watchlist_clear() to sometimes return False and
+    # branch on it here -- a real watchlist match must route through the
+    # separate Registered -> Held (watchlist_match) transition for
+    # authorized human review (no automated denial, security-privacy.md),
+    # never fail this transition directly. Rewire the call site, don't just
+    # flip the return value.
     identity_verified_by_code()
     watchlist_clear()
 
@@ -279,8 +288,17 @@ async def checkin_visit(
     if result.rowcount == 0:
         raise InvalidCheckinCodeError("invalid or expired check-in code")
 
+    # Reload scoped by status="CheckedIn" too (US-01 review, Note) -- belt-
+    # and-suspenders on top of the guarded UPDATE above, not a new guarantee
+    # (checkin_code_hash collision on a 192-bit token is already negligible).
     visit = (
-        await session.execute(select(Visit).where(Visit.tenant_id == tenant_id, Visit.checkin_code_hash == code_hash))
+        await session.execute(
+            select(Visit).where(
+                Visit.tenant_id == tenant_id,
+                Visit.checkin_code_hash == code_hash,
+                Visit.status == "CheckedIn",
+            )
+        )
     ).scalar_one()
 
     host_email = (
