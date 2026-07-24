@@ -6,8 +6,10 @@ services/core-api/*.egg-info/
 *.pyc
 
 # Node
+node_modules/
 apps/web/node_modules/
 apps/web/dist/
+.vite/
 
 # Flutter
 apps/kiosk/build/
