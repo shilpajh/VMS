@@ -34,6 +34,12 @@ from app.models import OutboxMessage, PortalContactVerification, User, Visit
 REDACTED = "[redacted]"
 PURGE_ACTOR = "vms_purge"
 PURGE_REASON = "retention_purge"
+# Coarse version stamp for the audit row; the substantive, self-describing
+# record is the per-category `retention_seconds` captured in `details.policy`
+# below, so a re-run against the forever-audit is legible without assuming
+# `created_at ≈ now` (US-07 verify Should-fix). The windows themselves are
+# still placeholders until the compliance owner ratifies them (Constraint 1).
+RETENTION_POLICY_VERSION = "v1"
 
 # On-site / mustering states whose visitor PII must NOT be scrubbed while the
 # person is accounted-for (life-safety; also excluded from erasure, DA-B2).
@@ -41,10 +47,6 @@ _ON_SITE_STATUSES = ("CheckedIn", "Safe")
 # Non-terminal states that, if abandoned, are purged by created_at max-age
 # (incl. orphaned NULL-host visits, SP-B3a).
 _ABANDONED_STATUSES = ("Requested", "Registered")
-
-
-async def _cutoff(session: AsyncSession, tenant_id: uuid.UUID, category: RetentionCategory, now: datetime) -> datetime:
-    return now - timedelta(seconds=await resolve_retention(session, tenant_id, category))
 
 
 def _users_predicate(cutoff: datetime):
@@ -72,10 +74,16 @@ async def purge_tenant(
     now = datetime.now(timezone.utc)
     counts: dict[str, int] = {}
 
-    users_cutoff = await _cutoff(session, tenant_id, RetentionCategory.STAFF_USERS, now)
-    visits_cutoff = await _cutoff(session, tenant_id, RetentionCategory.VISITS, now)
-    outbox_cutoff = await _cutoff(session, tenant_id, RetentionCategory.OUTBOX, now)
-    cv_cutoff = await _cutoff(session, tenant_id, RetentionCategory.CONTACT_VERIFICATIONS, now)
+    # Resolve every category's window ONCE, keeping both the seconds (for the
+    # self-describing audit) and the derived cutoff (for the predicates).
+    windows: dict[str, int] = {
+        cat.value: await resolve_retention(session, tenant_id, cat) for cat in RetentionCategory
+    }
+    cutoffs = {k: now - timedelta(seconds=s) for k, s in windows.items()}
+    users_cutoff = cutoffs[RetentionCategory.STAFF_USERS.value]
+    visits_cutoff = cutoffs[RetentionCategory.VISITS.value]
+    outbox_cutoff = cutoffs[RetentionCategory.OUTBOX.value]
+    cv_cutoff = cutoffs[RetentionCategory.CONTACT_VERIFICATIONS.value]
 
     if not execute:
         counts["staff_users"] = (
@@ -146,14 +154,14 @@ async def purge_tenant(
         target_id=tenant_id,
         reason=PURGE_REASON,
         correlation_id=uuid.uuid4(),
+        policy_version=RETENTION_POLICY_VERSION,
         details={
             "counts": counts,
-            "cutoffs": {
-                "staff_users": users_cutoff.isoformat(),
-                "visits": visits_cutoff.isoformat(),
-                "outbox_messages": outbox_cutoff.isoformat(),
-                "contact_verifications": cv_cutoff.isoformat(),
-            },
+            # Self-describing policy: the resolved window per category, so the
+            # append-only record needs no "created_at ≈ now" assumption to be
+            # legible (US-07 verify Should-fix).
+            "policy": {"version": RETENTION_POLICY_VERSION, "retention_seconds": windows},
+            "cutoffs": {k: v.isoformat() for k, v in cutoffs.items()},
         },
     )
     await session.flush()
