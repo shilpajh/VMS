@@ -1,0 +1,334 @@
+openapi: "3.1.0"
+info:
+  title: Smart VMS - Tenant & Identity API (US-10)
+  version: "1.0.0"
+  description: >
+    Staff SSO/RBAC surface: current-principal introspection, the tenant-global
+    role/permission catalogs, and tenant-scoped user/role management.
+    Authenticated via an Entra ID bearer token on every route (ADR-001 §5).
+    The 403 (tenant scope) and 409 (conflict) response declarations below are
+    mandatory per .claude/rules/contracts.md. Deliberately absent: any
+    `POST /platform/tenants` or other cross-tenant route -- tenant creation
+    is ops-script only (ADR-001 §4).
+paths:
+  /me:
+    get:
+      summary: Current authenticated principal
+      operationId: getMe
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The caller's normalized identity, roles, and permissions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MeResponse" }
+        "401":
+          description: Missing, invalid, expired token, or unknown/suspended tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /roles:
+    get:
+      summary: List the tenant-global role catalog
+      operationId: listRoles
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: All system roles (authenticated, not permission-gated).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RoleOut" }
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /permissions:
+    get:
+      summary: List the tenant-global permission catalog
+      operationId: listPermissions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: All system permissions (authenticated, not permission-gated).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PermissionOut" }
+        "401":
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /tenants/{tenant_id}/users:
+    parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: List users in a tenant
+      operationId: listTenantUsers
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Requires manage_users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserOut" }
+        "403":
+          description: >
+            Tenant mismatch (caller's tenant != path tenant_id) or missing
+            manage_users -- never 404, so a cross-tenant caller can never
+            distinguish "wrong tenant" from "no such resource."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      summary: Pre-provision a user in a tenant
+      operationId: createTenantUser
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserCreateRequest" }
+      responses:
+        "201":
+          description: Requires manage_users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserOut" }
+        "403":
+          description: Tenant mismatch or missing manage_users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A user already exists for this tenant + external_idp_subject.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /tenants/{tenant_id}/users/{user_id}:
+    parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      summary: Enable or disable a user
+      operationId: updateTenantUser
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserUpdateRequest" }
+      responses:
+        "200":
+          description: Requires manage_users. Writes a user.enabled/user.disabled audit event.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserOut" }
+        "403":
+          description: Tenant mismatch or missing manage_users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such user under the resolved (matching) tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /tenants/{tenant_id}/users/{user_id}/roles:
+    parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: List a user's role assignments
+      operationId: listUserRoles
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Requires manage_roles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserRoleOut" }
+        "403":
+          description: Tenant mismatch or missing manage_roles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      summary: Assign a role to a user
+      operationId: assignUserRole
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleAssignRequest" }
+      responses:
+        "201":
+          description: >
+            Requires manage_roles. Writes a role.assigned audit event with
+            the live permission policy_version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserRoleOut" }
+        "403":
+          description: Tenant mismatch or missing manage_roles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such role, or no such user under the resolved tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Role already assigned to this user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /tenants/{tenant_id}/users/{user_id}/roles/{role_id}:
+    parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: role_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      summary: Revoke a role from a user
+      operationId: revokeUserRole
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: reason
+          in: query
+          required: false
+          schema: { type: string, default: "revoked_by_admin" }
+      responses:
+        "204":
+          description: >
+            Requires manage_roles. Writes a role.revoked audit event with
+            the live permission policy_version.
+        "403":
+          description: Tenant mismatch or missing manage_roles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such role assignment under the resolved tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Entra ID access token; issuer pinned to the resolved tenant's trusted authority (ADR-001 §5, US-10 B1 remediation).
+
+  schemas:
+    MeResponse:
+      type: object
+      required: [id, tenant_id, display_name, roles, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        display_name: { type: string }
+        roles: { type: array, items: { type: string } }
+        permissions: { type: array, items: { type: string } }
+
+    RoleOut:
+      type: object
+      required: [id, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+
+    PermissionOut:
+      type: object
+      required: [id, code, description]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+
+    UserOut:
+      type: object
+      required: [id, tenant_id, email, display_name, status]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        email: { type: string }
+        display_name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+
+    UserCreateRequest:
+      type: object
+      required: [external_idp_subject, email, display_name]
+      properties:
+        external_idp_subject: { type: string, minLength: 1 }
+        email: { type: string, minLength: 1 }
+        display_name: { type: string, minLength: 1 }
+
+    UserUpdateRequest:
+      type: object
+      required: [status, reason]
+      properties:
+        status: { type: string, pattern: "^(active|disabled)$" }
+        reason: { type: string, minLength: 1 }
+
+    UserRoleOut:
+      type: object
+      required: [role_id, role_code]
+      properties:
+        role_id: { type: string, format: uuid }
+        role_code: { type: string }
+
+    RoleAssignRequest:
+      type: object
+      required: [role_id, reason]
+      properties:
+        role_id: { type: string, format: uuid }
+        reason: { type: string, minLength: 1 }
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }

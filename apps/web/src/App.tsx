@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { useIsAuthenticated, useMsal } from '@azure/msal-react'
+import { loginRequest } from './auth/msal'
+import { useCurrentUser } from './auth/useCurrentUser'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
@@ -15,8 +18,72 @@ async function fetchHealth(): Promise<HealthResponse> {
   return response.json()
 }
 
+// Before login: a sign-in affordance. The UI never decides who is allowed to
+// sign in or what they can do once in — it only triggers the MSAL flow.
+function StaffSignIn() {
+  const { t } = useTranslation()
+  const { instance } = useMsal()
+
+  const handleSignIn = () => {
+    void instance.loginPopup(loginRequest)
+  }
+
+  return (
+    <button type="button" onClick={handleSignIn}>
+      {t('auth.signIn', 'Sign in with your organization account')}
+    </button>
+  )
+}
+
+// After login: renders GET /me's normalized response as-is. No role/policy
+// decision is made here — the server has already decided; this only renders
+// three distinct states (loading / no-roles-yet / error) plus the happy path.
+function StaffSession() {
+  const { t } = useTranslation()
+  const { data, error, isLoading } = useCurrentUser()
+
+  if (isLoading) {
+    return <p>{t('auth.loading', 'Loading your profile…')}</p>
+  }
+
+  if (error) {
+    return (
+      <p role="alert">
+        {t('auth.error', 'Could not load your profile. Please try again or contact support.')}
+      </p>
+    )
+  }
+
+  if (data && data.roles.length === 0) {
+    // JIT-zero-roles UX cliff (US-10 plan, Part A Risks): a brand-new SSO
+    // user with no role assigned yet must look distinct from an error, not
+    // like something is broken.
+    return (
+      <p role="status">
+        {t('auth.noRoles', 'No roles assigned yet — contact your administrator.')}
+      </p>
+    )
+  }
+
+  if (data) {
+    return (
+      <div>
+        <p>{t('auth.displayName', 'Signed in as {{name}}', { name: data.display_name })}</p>
+        <ul aria-label={t('auth.rolesLabel', 'Your roles')}>
+          {data.roles.map((role) => (
+            <li key={role}>{role}</li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+
+  return null
+}
+
 function App() {
   const { t } = useTranslation()
+  const isAuthenticated = useIsAuthenticated()
   const { data, error, isLoading } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
@@ -28,6 +95,10 @@ function App() {
       {isLoading && <p>{t('health.checking', 'Checking core-api…')}</p>}
       {error && <p role="alert">{t('health.error', 'core-api unreachable')}</p>}
       {data && <p>{t('health.status', 'core-api status: {{status}}', { status: data.status })}</p>}
+
+      <section aria-label={t('auth.sectionLabel', 'Staff sign-in')}>
+        {isAuthenticated ? <StaffSession /> : <StaffSignIn />}
+      </section>
     </main>
   )
 }

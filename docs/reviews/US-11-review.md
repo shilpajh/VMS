@@ -1,0 +1,54 @@
+# US-11 (Website pre-registration visibility) — Design-Gate Review
+
+**Reviewer:** security-privacy-reviewer (independent, read-only). **Scope:** pre-implementation design-gate cold-read of the domain-architect design note (not yet written to disk as an ADR at review time). "Blocking" = the design as specified would produce a blocking defect if implemented as-is — same standard as the ADR-001 review.
+
+Overall: a strong, unusually self-flagging design note. The rate-limiting/CAPTCHA specification, state-machine enforcement, anti-enumeration posture, and audit-actor reconciliation are all at or above the bar. One Blocking item — about what US-11 is allowed to ship on top of, not a flaw in US-11's own logic — plus ten Should-fix specification gaps to close before implementation.
+
+---
+
+## BLOCKING
+
+### B1 — US-11's host-side tenant isolation rests entirely on `get_current_principal`, which currently contains US-10's open, unremediated auth-bypass (US-10 review B1). The design's §0 framing ("doesn't depend on the fix") is correct for development sequencing but incorrect as a merge/ship decision.
+
+The design note's §0 states US-11 "doesn't depend on US-10's auth-bypass fix ... but can be built/tested locally regardless of that unrelated bug." The first half is defensible for development — US-11 can be written and unit-tested against a local principal. The second half mislabels US-10 B1 an "unrelated bug": US-11's host approve/deny/list endpoints derive both the ownership check (`visit.host_user_id == principal.user_id`) and the RLS `SET LOCAL app.current_tenant_id` entirely from `get_current_principal`. Per the still-open US-10 finding (`docs/reviews/US-10-review.md`), that function trusts the token's self-asserted `iss` as its own trust anchor, allowing a forged token with an attacker-chosen `tid`/`oid` to authenticate as any host in any tenant.
+
+If US-11 is implemented and merged as §0 sequences it, every US-11 host endpoint inherits full cross-tenant impersonation: forged principals could approve/deny visits (issue or withhold credentials) or list another tenant's visitors, because the `principal.tenant_id` feeding the RLS GUC is attacker-controlled. RLS does not save this — it enforces the GUC value, and the GUC value is itself forged. This is `.claude/rules/security-privacy.md`'s "cross-tenant access is a blocking defect in any component," now reachable through the new US-11 surface.
+
+**Required corrections before this design is approved:**
+1. Reclassify the US-10 B1 fix as a hard **merge/ship gate** for US-11 — build and unit-test on the branch is fine; merging to a release branch or deploying while B1 is open is not.
+2. US-11's verifier set must include a forged-issuer, wrong-`tid` cross-tenant test fired at US-11's own `/visits/{id}/approve`, `/deny`, and `GET /visits` endpoints specifically (not only reusing US-10's identity-route tests) — the isolation guarantee for the new surface must be proven, not assumed by inheritance.
+
+---
+
+## SHOULD FIX
+
+1. **Public `Idempotency-Key` dedup scope is unspecified and is a cross-tenant/cross-visitor disclosure risk if implemented naively.** The design specifies the *outbox* idempotency key precisely but leaves the anonymous *public-submission* dedup key unscoped. Require: the dedup entry is written/read only after `SET LOCAL app.current_tenant_id` (tenant-scoped), and keyed to submission content (e.g. a hash of `contact_value`+`host_hint`) so a guessed key can't return an unrelated submission's reference.
+2. **Host-typed `denial_reason` free text is piped verbatim into the purge-exempt `audit_events.reason`.** `audit_events` is append-only and explicitly not subject to user-PII purge. A host's free-text deny reason can contain visitor PII, writing it into a forever-retained store while the same text also lives on the purgeable `visits.denial_reason` column — defeating erasure. Prefer: `visit.denied`'s audit `reason` carries a coded/controlled value or a reference to `visits.id`; the free-text reason stays only on the purgeable `visits` row.
+3. **New PII stores (`visits`, `outbox_messages`) have no retention/purge-workflow registration.** Same gap already flagged for US-10's `users` table. Cannot be closed inside US-11 (US-07 doesn't exist yet); requires a human compliance owner; must be tracked as a hard GA gate, not lost.
+4. **`checkin_code_hash` under-specifies the code as a credential.** Neither entropy/format nor hash algorithm is specified. If it's a short numeric OTP, a bare hash is weak against offline brute force (needs a keyed HMAC + attempt-limiting + short expiry); if it's a long `secrets.token_urlsafe`, a plain hash is fine. State the entropy + hashing decision now even though verification is a later story.
+5. **Plaintext check-in code + visitor PII sit at rest in `outbox_messages.payload` JSONB**, protected only by RLS + disk encryption. Recommend application-level envelope encryption (Key Vault-managed key) for the payload. Two adjacent gaps: (a) failed/never-dispatched rows hold plaintext code + PII indefinitely — define a max-age purge, register with #3; (b) the relay worker must never log the payload on retry/error.
+6. **Gherkin Scenario 5's expected 409 doesn't map cleanly onto the design's endpoint surface.** The design's safety property (no route accepts a target status/trigger) means an attempt to reach `CheckedIn` has no route at all — likely 404/405/422, not 409. The design's real 409 path is "approve/deny on a non-Requested visit." Define the exact HTTP call the verifier makes for Scenario 5 before implementation.
+7. **The deferred `view_visits` model must be confirmed against Scenario 1's "live visitor list" assertion.** Owner-scoped-only visibility satisfies Scenario 1 only if the verifier queries as the owning host. This is a real authZ scope decision the design correctly declines to make alone.
+8. **Consent/privacy-notice for visitor PII collection is a real DPDP gap**, correctly flagged by the design, not resolvable by an agent — needs the Compliance-module owner + a human sign-off, tracked as a GA-blocking item.
+9. **Migration rollback not mentioned.** `0002_visits` (and `outbox_messages` if same migration) must ship a tested `downgrade()`.
+10. **Notification message lacks a staleness/expiry send-gate.** `code_expires_at` is carried in the payload but nothing states the worker honors it before dispatching. Define a "do not dispatch if expired/superseded" guard as part of the recommended ADR-002.
+
+## NOTES
+
+- Rate-limiting/CAPTCHA design genuinely satisfies the AGENTS.md portal guardrail — concrete numbers, concrete mechanism, correct ordering (verify before DB work), correct `X-Forwarded-For` handling. Two refinements only: order CAPTCHA-verify before tenant-slug resolution (avoid a slug-validity timing oracle); state the `siteverify` secret lives in Key Vault.
+- State-machine enforcement (domain table + DB-level guarded conditional UPDATE + CHECK backstop) exceeds the bar — genuinely race-safe, domain-layer-plus-DB-transaction as AGENTS.md requires.
+- Audit-actor "portal"/stable-id resolution: agreed, matches the enforced US-10 precedent. The only PII-into-audit problem is the *reason* free-text (Should-fix #2), not the actor.
+- Composite nullable FK `(host_user_id, tenant_id) → users(id, tenant_id)`: structurally sound under Postgres MATCH SIMPLE — NULL exempts the row, non-NULL always enforces same-tenant.
+- `tracking_reference` scheme is a good anti-volume-oracle now (no public lookup endpoint exists in this story, so no probe surface). Flag forward: a future lookup-by-reference story should revisit entropy and add rate-limiting.
+- Orphaned NULL-host visits are invisible-but-retained under the current design — ensure the retention/purge registration (#3) explicitly covers these.
+- Integration relay worker's tenant context is unspecified (fine to defer, not built here) — needs its own security review when built; must not run as the request-path `vms_app` role.
+
+**Disposition:** One Blocking merge-gate finding (must not ship while US-10 B1 is open; must add US-11-specific forged-token tests). Ten Should-fix items, two of which (#3 purge registration, #8 consent) require a human compliance owner. Design is otherwise sound and approvable once the §0 framing is corrected and the Should-fix gaps are closed.
+
+Relevant files:
+- `/home/shilpa/SmartVMS/specs/features/US-11-portal-visibility.feature`
+- `/home/shilpa/SmartVMS/docs/reviews/US-10-review.md` (the open B1 dependency)
+- `/home/shilpa/SmartVMS/docs/architecture/adr/ADR-001-tenancy-identity-schema.md`
+- `/home/shilpa/SmartVMS/services/core-api/app/domain/audit.py`, `/home/shilpa/SmartVMS/services/core-api/app/models/audit.py`
+- `/home/shilpa/SmartVMS/services/core-api/app/models/user.py` (`uq_users_id_tenant_id`)
+- `.claude/rules/security-privacy.md`, `.claude/rules/database-postgresql.md`, `.claude/rules/backend-python.md`, `.claude/rules/contracts.md`
