@@ -78,6 +78,14 @@ def _migrated_schema(_provisioned_db_roles) -> None:
 _test_app_engine = create_async_engine(APP_ASYNC_DSN, poolclass=NullPool)
 TestAppSessionLocal = async_sessionmaker(_test_app_engine, expire_on_commit=False)
 
+# --- Async session as the vms_purge role (US-07): NOBYPASSRLS, so RLS+FORCE
+# structurally scopes the purge to whichever tenant the GUC is set to. The
+# purge tests use THIS, never app_session/migrator, so they exercise the real
+# structural-isolation guarantee (SP-B2), not a bypass.
+PURGE_ASYNC_DSN = "postgresql+asyncpg://vms_purge:dev-only-not-for-real-secrets@localhost:5432/vms_test"
+_test_purge_engine = create_async_engine(PURGE_ASYNC_DSN, poolclass=NullPool)
+TestPurgeSessionLocal = async_sessionmaker(_test_purge_engine, expire_on_commit=False)
+
 
 @pytest.fixture()
 async def app_session(_migrated_schema):
