@@ -159,6 +159,29 @@ async def test_approve_writes_visit_registered_audit_with_actor_and_policy_versi
     assert audit.policy_version == PERMISSION_POLICY_VERSION
 
 
+async def test_approve_persists_checkin_code_expires_at_matching_outbox_not_valid_after(
+    app_session, key_provider
+) -> None:
+    """US-01, task 2: `checkin_code_expires_at` must now be persisted on the
+    `visits` row itself (not just transiently copied onto
+    `outbox_messages.not_valid_after`), so the check-in domain layer can
+    enforce `within_visit_window` by reading `visits` alone."""
+    tenant_id = insert_tenant("Acme", f"acme-entra-tid-{uuid.uuid4().hex[:8]}")
+    host_user_id = insert_user(tenant_id, f"oid-host-{uuid.uuid4().hex[:8]}")
+    await set_tenant_context(app_session, tenant_id)
+    visit = await _make_requested_visit(app_session, tenant_id, host_user_id)
+
+    result = await approve_visit(
+        app_session, tenant_id=tenant_id, visit_id=visit.id, actor_user_id=host_user_id, key_provider=key_provider
+    )
+
+    outbox = (
+        await app_session.execute(select(OutboxMessage).where(OutboxMessage.aggregate_id == visit.id))
+    ).scalar_one()
+    assert result.checkin_code_expires_at is not None
+    assert result.checkin_code_expires_at == outbox.not_valid_after
+
+
 async def test_approve_on_non_requested_visit_raises_invalid_transition(app_session, key_provider) -> None:
     tenant_id = insert_tenant("Acme", f"acme-entra-tid-{uuid.uuid4().hex[:8]}")
     host_user_id = insert_user(tenant_id, f"oid-host-{uuid.uuid4().hex[:8]}")

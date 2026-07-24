@@ -99,6 +99,10 @@ async def approve_visit(
     checkin_code = secrets.token_urlsafe(24)
     visit.checkin_code_hash = hashlib.sha256(checkin_code.encode()).hexdigest()
     code_expires_at = datetime.now(timezone.utc) + CHECKIN_CODE_VALIDITY
+    # Persisted here (US-01, task 2) so the check-in domain layer can read
+    # `within_visit_window` off this row alone -- previously this value only
+    # ever reached outbox_messages.not_valid_after (a dispatch artifact).
+    visit.checkin_code_expires_at = code_expires_at
 
     tenant_name = (
         await session.execute(select(Tenant.name).where(Tenant.id == tenant_id))
