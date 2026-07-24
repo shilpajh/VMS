@@ -1,0 +1,82 @@
+asyncapi: "3.0.0"
+info:
+  title: Smart VMS - visit.arrival.notify (US-01, ADR-003)
+  version: "1"
+  description: >
+    Host-arrival-notification INTENT, written by the Visitor & Visits
+    domain inside the same transaction as the Registered->CheckedIn
+    (checkin_verified) transition. Relayed by the same (not-yet-built,
+    out of scope for US-01) Integration worker as
+    visit-checkin-dispatch.yaml -- delivery (actual email/WhatsApp/SMS
+    send) is that worker's job, same scope cut US-11 already made for the
+    visitor-facing check-in-code dispatch.
+
+    Host contact channel is users.email only in this story -- users has no
+    phone/WhatsApp column yet (US-01 plan, Out of scope).
+
+    Envelope-encrypted (ADR-002 §5) -- this payload carries PII
+    (host_email, visitor_full_name).
+
+    Must be registered under the same standing PII-retention/purge GA gate
+    US-11 already tracks for visit.checkin_code.dispatch (US-01 plan, task
+    10) -- a new PII-bearing message type, even though it reuses the same
+    outbox_messages table.
+channels:
+  visit.arrival.notify:
+    address: visit.arrival.notify
+    messages:
+      VisitArrivalNotify:
+        $ref: "#/components/messages/VisitArrivalNotify"
+operations:
+  publishVisitArrivalNotify:
+    action: send
+    channel:
+      $ref: "#/channels/visit.arrival.notify"
+    summary: >
+      Published by the Visitor & Visits domain when a visit transitions
+      Registered -> CheckedIn (checkin_verified). idempotency_key is
+      deterministic: sha256("visit.arrival.notify:" + visit_id) -- one
+      host-arrival notification per visit.
+components:
+  messages:
+    VisitArrivalNotify:
+      name: VisitArrivalNotify
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - schema_version
+          - tenant_id
+          - visit_id
+          - correlation_id
+          - idempotency_key
+          - host_user_id
+          - host_email
+          - visitor_full_name
+          - tracking_reference
+        properties:
+          schema_version:
+            type: string
+            const: "1"
+          tenant_id: { type: string, format: uuid }
+          visit_id: { type: string, format: uuid }
+          correlation_id: { type: string, format: uuid }
+          idempotency_key:
+            type: string
+            description: Deterministic -- sha256("visit.arrival.notify:" + visit_id).
+          host_user_id: { type: string, format: uuid }
+          host_email:
+            type: string
+            description: PII -- never logged, at rest only as ciphertext.
+          visitor_full_name:
+            type: string
+            description: PII -- never logged, at rest only as ciphertext.
+          tracking_reference:
+            type: string
+            pattern: "^REQ-\\d+$"
+x-send-gate:
+  description: >
+    Same discipline as visit-checkin-dispatch.yaml's x-send-gate (ADR-002
+    §4): the not-yet-built relay worker must not log the decrypted payload,
+    not on success, retry, or error. Errors log id, tenant_id, message_type,
+    idempotency_key, attempts only.
