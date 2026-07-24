@@ -148,8 +148,12 @@ def test_new_visits_data_columns_nullable_and_flag_notnull_with_default(scratch_
 
 
 def test_downgrade_one_step_removes_only_0004_additions(scratch_database: str) -> None:
+    # Pin the ABSOLUTE revision (not "head") so a later migration landing on
+    # top doesn't retarget this -1 downgrade -- same fix applied to 0002/0003
+    # (the recurring gotcha the proposed confirm-schema rule addresses; 0005
+    # is what broke it here).
     cfg = alembic_config(_migrator_dsn(scratch_database))
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0004_portal_contact_verification")
     command.downgrade(cfg, "-1")
     assert NEW_TABLE not in _table_names(scratch_database)
     cols = _visits_columns(scratch_database)
