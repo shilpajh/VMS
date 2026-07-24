@@ -1,7 +1,6 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { useMsal } from '@azure/msal-react'
-import { InteractionRequiredAuthError } from '@azure/msal-browser'
-import { loginRequest } from './msal'
+import { getAccessToken } from './getAccessToken'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
@@ -41,18 +40,7 @@ export function useCurrentUser(): UseQueryResult<CurrentUser, Error> {
       if (!account) {
         throw new Error('useCurrentUser: no authenticated MSAL account')
       }
-      let accessToken: string
-      try {
-        const result = await instance.acquireTokenSilent({ ...loginRequest, account })
-        accessToken = result.accessToken
-      } catch (silentError) {
-        if (silentError instanceof InteractionRequiredAuthError) {
-          const result = await instance.acquireTokenPopup({ ...loginRequest, account })
-          accessToken = result.accessToken
-        } else {
-          throw silentError
-        }
-      }
+      const accessToken = await getAccessToken(instance, account)
       return fetchCurrentUser(accessToken)
     },
     enabled: Boolean(account),
